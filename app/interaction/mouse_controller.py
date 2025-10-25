@@ -200,8 +200,11 @@ class MouseController(QtCore.QObject):
             if self._rc_press_scene is None:
                 return True
             cur = ev.scenePos()
-            if not self._rc_dragging and (cur - self._rc_press_scene).manhattanLength() > self._rc_drag_thresh_px:
-                self._rc_dragging = True
+            if not self._rc_dragging:
+                # Robust Manhattan distance for QPointF (avoid QPointF.manhattanLength)
+                d = abs(cur.x() - self._rc_press_scene.x()) + abs(cur.y() - self._rc_press_scene.y())
+                if d > self._rc_drag_thresh_px:
+                    self._rc_dragging = True
 
             # ピボットを中心にXY独立スケール
             dx_px = cur.x() - (self._rc_last_scene.x() if self._rc_last_scene else cur.x())
