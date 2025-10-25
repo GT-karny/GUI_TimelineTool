@@ -1,7 +1,8 @@
 # ui/main_window.py
 from __future__ import annotations
 from typing import Set, List, Optional
-from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6 import QtWidgets, QtCore
+from PySide6.QtGui import QUndoStack
 import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode
@@ -14,8 +15,12 @@ from .inspector import KeyInspector  # ★ 追加
 from ..interaction.selection import SelectionManager
 from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
-from ..core.history import TimelineHistory
 
+
+from ..actions.undo_commands import (
+    AddKeyCommand, DeleteKeysCommand, MoveKeyCommand,
+    SetKeyTimeCommand, SetKeyValueCommand
+)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -26,8 +31,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Model ---
         self.timeline = Timeline()
         self.sample_rate_hz: float = 90.0
-        self.history = TimelineHistory(self.timeline)
-        self._history_dirty = False
 
         # --- Toolbar ---
         self.toolbar = TimelineToolbar(self.timeline.duration_s, self.sample_rate_hz)
@@ -55,6 +58,23 @@ class MainWindow(QtWidgets.QMainWindow):
         # モデル→ビュー注入
         self.plotw.set_timeline(self.timeline)
 
+        self.undo = QUndoStack(self)
+        # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
+        self.act_undo = self.undo.createUndoAction(self, "Undo")
+        self.act_redo = self.undo.createRedoAction(self, "Redo")
+        # 念のためアプリケーションスコープで効くように
+        self.act_undo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
+        self.act_redo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
+        self.addAction(self.act_undo)
+        self.addAction(self.act_redo)
+
+        # ついでにUndo/Redoのたびに再描画
+        self.undo.indexChanged.connect(self._refresh_view)
+        self.undo.indexChanged.connect(lambda _: print(
+            f"[UNDO DEBUG] index={self.undo.index()} / count={self.undo.count()} / clean={self.undo.isClean()}"
+        ))
+
+
         # --- Selection / Mouse 配線 ---
         self._pos_provider = SingleTrackPosProvider(self.plotw.plot, self.timeline.track, track_id=0)
         self.sel = SelectionManager(self.plotw.plot.scene(), self._pos_provider)
@@ -63,10 +83,14 @@ class MainWindow(QtWidgets.QMainWindow):
             timeline=self.timeline,
             selection=self.sel,
             pos_provider=self._pos_provider,
-            on_timeline_preview=self._on_timeline_preview,
-            on_timeline_changed=self._on_timeline_changed,
-            on_selection_changed=self._on_selection_changed,
+            on_changed=self._refresh_view,
             set_playhead=self.plotw.set_playhead,
+            commit_drag=lambda key, before, after: self.undo.push(
+                MoveKeyCommand(self.timeline, key, before, after)
+            ),
+            # ▼ 追加：右クリック/ダブルクリックの Add/Delete を Undo に積む
+            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(AddKeyCommand(self.timeline, t, v)),
+            delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
         )
 
 
@@ -79,9 +103,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._timer.timeout.connect(self._on_tick)
         self._t0: Optional[QtCore.QTime] = None
         self._play_fps = 60
-
-        # --- Shortcuts ---
-        self._init_shortcuts()
 
         # --- 初期描画・レンジ ---
         self._refresh_view()
@@ -101,59 +122,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
+
+
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
-        target = {
+        self.timeline.track.interp = {
             "cubic": InterpMode.CUBIC,
             "linear": InterpMode.LINEAR,
             "step": InterpMode.STEP,
         }[name]
-        if self.timeline.track.interp == target:
-            return
-        self.timeline.track.interp = target
-        self._record_timeline_change()
+        self._refresh_view()
 
     def _on_duration_changed(self, seconds: float):
-        seconds = float(seconds)
-        if abs(self.timeline.duration_s - seconds) < 1e-9:
-            return
-        self.timeline.set_duration(seconds)
+        self.timeline.set_duration(float(seconds))
         self.plotw.fit_x()
-        self._record_timeline_change()
+        self._refresh_view()
 
     def _on_rate_changed(self, hz: float):
         self.sample_rate_hz = float(hz)
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
+        # 仕様：補間値を初期値に
         v = float(evaluate(self.timeline.track, np.array([t]))[0])
-        kf = Keyframe(float(max(0.0, t)), v)
-        self.timeline.track.keys.append(kf)
-        self.timeline.track.clamp_times()
-        self.sel.set_single(0, id(kf))
-        self._record_timeline_change()
+        cmd = AddKeyCommand(self.timeline, t, v)
+        self.undo.push(cmd)
+        # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
+        kf = cmd.k
+        if kf is not None:
+            self.sel.set_single(0, id(kf))
+        self._refresh_view()
 
     def _on_delete_selected(self):
-        if not self.sel.selected:
-            return
         key_ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        changed = False
-        if key_ids:
-            before = len(self.timeline.track.keys)
-            self.timeline.track.keys = [k for k in self.timeline.track.keys if id(k) not in key_ids]
-            changed = len(self.timeline.track.keys) != before
+        if not key_ids:
+            return
+        targets = [k for k in self.timeline.track.keys if id(k) in key_ids]
+        if not targets:
+            return
+        self.undo.push(DeleteKeysCommand(self.timeline, targets))
         self.sel.clear()
-        if changed:
-            self._record_timeline_change()
-        else:
-            self._refresh_view()
+        self._refresh_view()
 
     def _on_reset(self):
         self.timeline.track.keys.clear()
         self.timeline.track.keys.append(Keyframe(0.0, 0.0))
         self.timeline.track.keys.append(Keyframe(self.timeline.duration_s, 0.0))
         self.sel.clear()
-        self._record_timeline_change()
+        self._refresh_view()
 
     def _on_export_csv(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export CSV", "timeline.csv", "CSV Files (*.csv)")
@@ -171,33 +187,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- Inspector handlers --------------------
     def _on_inspector_time(self, t_new: float):
-        """インスペクタから時刻編集。単一選択なら1件、複数選択なら全件に適用。"""
-        key_list = self._selected_keys()
-        if not key_list:
+        keys = self._selected_keys()
+        if len(keys) != 1:
             return
+        k = keys[0]
         t_new = float(max(0.0, t_new))
-        if all(abs(k.t - t_new) < 1e-9 for k in key_list):
+        if abs(k.t - t_new) < 1e-12:
             return
-        if len(key_list) == 1:
-            key_list[0].t = t_new
-        else:
-            # 複数選択：全て同じ t に（要件に合わせてオフセット維持に変えることも可）
-            for k in key_list:
-                k.t = t_new
-        self.timeline.track.clamp_times()
-        self._record_timeline_change()
+        self.undo.push(SetKeyTimeCommand(self.timeline, k, old_t=k.t, new_t=t_new))
+        self._refresh_view()
 
     def _on_inspector_value(self, v_new: float):
-        """インスペクタから値編集。単一/複数選択ともに値を適用。"""
-        key_list = self._selected_keys()
-        if not key_list:
+        keys = self._selected_keys()
+        if len(keys) != 1:
             return
+        k = keys[0]
         v_new = float(v_new)
-        if all(abs(k.v - v_new) < 1e-9 for k in key_list):
+        if abs(k.v - v_new) < 1e-12:
             return
-        for k in key_list:
-            k.v = v_new
-        self._record_timeline_change()
+        self.undo.push(SetKeyValueCommand(k, old_v=k.v, new_v=v_new))
+        self._refresh_view()
 
     # -------------------- Playback tick（暫定） --------------------
     def _on_tick(self):
@@ -209,19 +218,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
-        if getattr(self, "history", None) is not None and self._history_dirty:
-            self.history.push()
-            self._history_dirty = False
-
         ks = self.timeline.track.sorted()
         self.plotw.update_curve()
 
         selected_key_ids: Set[int] = {kid for (tid, kid) in self.sel.selected if tid == 0}
         self.plotw.update_points(ks, selected_key_ids)
-
-        # --- toolbar sync ---
-        self.toolbar.set_interp(self.timeline.track.interp.value)
-        self.toolbar.set_duration(self.timeline.duration_s)
 
         # --- inspector sync ---
         selected_keys = [k for k in ks if id(k) in selected_key_ids]
@@ -231,60 +232,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.inspector.set_no_or_multi()
 
-        self._update_history_actions()
-
     # -------------------- Helpers --------------------
     def _selected_keys(self) -> List[Keyframe]:
         ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
         return [k for k in self.timeline.track.sorted() if id(k) in ids]
-
-    def _record_timeline_change(self) -> None:
-        self._history_dirty = True
-        self._refresh_view()
-
-    def _on_timeline_preview(self) -> None:
-        # インタラクティブ操作中の再描画（履歴追加なし）
-        was_dirty = self._history_dirty
-        self._history_dirty = False
-        self._refresh_view()
-        self._history_dirty = was_dirty
-
-    def _on_timeline_changed(self) -> None:
-        self._record_timeline_change()
-
-    def _on_selection_changed(self) -> None:
-        self._refresh_view()
-
-    def _init_shortcuts(self) -> None:
-        self._undo_action = QtGui.QAction("Undo", self)
-        self._undo_action.setShortcuts([QtGui.QKeySequence.Undo])
-        self._undo_action.triggered.connect(self._on_undo)
-        self.addAction(self._undo_action)
-
-        self._redo_action = QtGui.QAction("Redo", self)
-        self._redo_action.setShortcuts([QtGui.QKeySequence.Redo, QtGui.QKeySequence("Ctrl+Y")])
-        self._redo_action.triggered.connect(self._on_redo)
-        self.addAction(self._redo_action)
-
-        self._delete_action = QtGui.QAction("Delete Keys", self)
-        self._delete_action.setShortcuts([QtGui.QKeySequence.Delete, QtGui.QKeySequence("Backspace")])
-        self._delete_action.triggered.connect(self._on_delete_selected)
-        self.addAction(self._delete_action)
-
-        self._update_history_actions()
-
-    def _on_undo(self) -> None:
-        if self.history.undo():
-            self.sel.clear()
-            self._refresh_view()
-
-    def _on_redo(self) -> None:
-        if self.history.redo():
-            self.sel.clear()
-            self._refresh_view()
-
-    def _update_history_actions(self) -> None:
-        if not hasattr(self, "_undo_action"):
-            return
-        self._undo_action.setEnabled(self.history.can_undo())
-        self._redo_action.setEnabled(self.history.can_redo())

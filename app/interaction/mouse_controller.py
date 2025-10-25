@@ -26,19 +26,19 @@ class MouseController(QtCore.QObject):
         timeline: Timeline,
         selection: SelectionManager,
         pos_provider: KeyPosProvider,
-        on_timeline_preview: Callable[[], None],   # 操作中の即時更新
-        on_timeline_changed: Callable[[], None],   # モデル変更確定後の再描画トリガ
-        on_selection_changed: Callable[[], None],  # 選択変更時の再描画トリガ
-        set_playhead: Callable[[float], None],     # プレイヘッド更新
+        on_changed: Callable[[], None],
+        set_playhead: Callable[[float], None],
+        commit_drag: Optional[Callable[[Keyframe, tuple, tuple], None]] = None,
+        # ▼ 追加：右クリック/ダブルクリック用のコールバック
+        add_key_cb: Optional[Callable[[float, float], Optional[Keyframe]]] = None,
+        delete_key_cb: Optional[Callable[[Keyframe], None]] = None,
     ):
         super().__init__()
         self.plot = plot_widget
         self.timeline = timeline
         self.sel = selection
         self.provider = pos_provider
-        self.on_timeline_preview = on_timeline_preview
-        self.on_timeline_changed = on_timeline_changed
-        self.on_selection_changed = on_selection_changed
+        self.on_changed = on_changed
         self.set_playhead = set_playhead
 
         # 状態
@@ -59,6 +59,11 @@ class MouseController(QtCore.QObject):
 
         # イベントフック
         self.plot.scene().installEventFilter(self)
+
+        self.commit_drag = commit_drag
+        self.add_key_cb = add_key_cb          
+        self.delete_key_cb = delete_key_cb    
+        self._drag_start_tv: tuple[float, float] | None = None
 
     # ---- ショートカット ----
     @property
@@ -97,12 +102,15 @@ class MouseController(QtCore.QObject):
                 else:
                     self.sel.set_single(hit.track_id, hit.key_id)
                 self._dragging_key = hit
-                self.on_selection_changed()
+                k = self._resolve_key(hit)
+                if k is not None:
+                    self._drag_start_tv = (k.t, k.v)
+                self.on_changed()
             else:
                 # 空白：選択が存在すれば解除、なければプレイヘッド移動
                 if self.sel.selected:
                     self.sel.clear()
-                    self.on_selection_changed()
+                    self.on_changed()
                 else:
                     vp = self._scene_to_view(ev.scenePos())
                     self.set_playhead(max(0.0, float(vp.x())))
@@ -119,37 +127,47 @@ class MouseController(QtCore.QObject):
                     k.t = float(max(0.0, mp.x()))
                     k.v = float(mp.y())
                     self.timeline.track.clamp_times()
-                    self.on_timeline_preview()
+                    self.on_changed()
                 return True
             # マルキー更新
             self.sel.marquee_update(ev.scenePos())
-            self.on_selection_changed()
+            self.on_changed()
             return True
 
         if et == QtCore.QEvent.GraphicsSceneMouseRelease and ev.button() == Qt.LeftButton:
             self._left_down = False
-            was_dragging = self._dragging_key is not None
-            self._dragging_key = None
+            if self._dragging_key is not None:
+                k = self._resolve_key(self._dragging_key)
+                if k is not None and self.commit_drag and self._drag_start_tv is not None:
+                    t0, v0 = self._drag_start_tv
+                    t1, v1 = k.t, k.v
+                    if abs(t0 - t1) > 1e-12 or abs(v0 - v1) > 1e-12:
+                        self.commit_drag(k, (t0, v0), (t1, v1))
+                self._dragging_key = None
+                self._drag_start_tv = None
             # Shift押下なら加算選択
             self.sel.marquee_commit(additive=self._is_shift(ev))
-            if was_dragging:
-                self.on_timeline_changed()
-            else:
-                self.on_selection_changed()
+            self.on_changed()
             return True
 
         # 左ダブルクリック：カーソル位置にキー追加（スケール無関係）
-        if et == QtCore.QEvent.GraphicsSceneMouseDoubleClick and ev.button() == QtCore.Qt.LeftButton:
+        if et == QtCore.QEvent.GraphicsSceneMouseDoubleClick and ev.button() == Qt.LeftButton:
             vp = self._scene_to_view(ev.scenePos())
             t = float(max(0.0, vp.x()))
-            v = float(vp.y())  # ★仕様通り「カーソルのY」を採用
-            kf = Keyframe(t, v)
-            self.timeline.track.keys.append(kf)
-            self.timeline.track.clamp_times()
-            self.sel.set_single(0, id(kf))  # 単一トラック: track_id=0
-            self.on_timeline_changed()
-            self.on_selection_changed()
+            v = float(vp.y())
+            if self.add_key_cb:
+                kf = self.add_key_cb(t, v)
+                if kf is not None:
+                    self.sel.set_single(0, id(kf))
+                    self.on_changed()
+            else:
+                kf = Keyframe(t, v)
+                self.timeline.track.keys.append(kf)
+                self.timeline.track.clamp_times()
+                self.sel.set_single(0, id(kf))
+                self.on_changed()
             return True
+
 
         # ---------------- 中ボタン（パン） ----------------
         if et == QtCore.QEvent.GraphicsSceneMousePress and ev.button() == Qt.MiddleButton:
@@ -182,8 +200,11 @@ class MouseController(QtCore.QObject):
             if self._rc_press_scene is None:
                 return True
             cur = ev.scenePos()
-            if not self._rc_dragging and (cur - self._rc_press_scene).manhattanLength() > self._rc_drag_thresh_px:
-                self._rc_dragging = True
+            if not self._rc_dragging:
+                # Robust Manhattan distance for QPointF (avoid QPointF.manhattanLength)
+                d = abs(cur.x() - self._rc_press_scene.x()) + abs(cur.y() - self._rc_press_scene.y())
+                if d > self._rc_drag_thresh_px:
+                    self._rc_dragging = True
 
             # ピボットを中心にXY独立スケール
             dx_px = cur.x() - (self._rc_last_scene.x() if self._rc_last_scene else cur.x())
@@ -238,24 +259,41 @@ class MouseController(QtCore.QObject):
 
         if chosen is act_add:
             vp = self._scene_to_view(ev.scenePos())
-            t = float(max(0.0, vp.x()))
-            v = float(evaluate(self.timeline.track, np.array([t]))[0])
-            kf = Keyframe(t, v)
-            self.timeline.track.keys.append(kf)
-            self.timeline.track.clamp_times()
-            # 新規キーを単一選択に
-            self.sel.set_single(0, id(kf))  # track_id=0（単一トラック暫定）
-            self.on_timeline_changed()
-            self.on_selection_changed()
+            t, v = float(max(0.0, vp.x())), float(vp.y())
+            if self.add_key_cb:
+                kf = self.add_key_cb(t, v)  # Undo経由で追加、Keyframe を返す想定
+                if kf is not None:
+                    self.sel.set_single(0, id(kf))
+                    self.on_changed()
+            else:
+                # フォールバック（Undoなし直書き）
+                kf = Keyframe(t, v)
+                self.timeline.track.keys.append(kf)
+                self.timeline.track.clamp_times()
+                self.sel.set_single(0, id(kf))
+                self.on_changed()
 
         elif chosen is act_del:
-            # 近傍点を1つ削除
-            hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=9999)
-            if hit is not None:
+            try:
+                hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=9999)
+                if not hit:
+                    return
                 key = self._resolve_key(hit)
-                if key is not None and key in self.timeline.track.keys:
-                    self.timeline.track.keys.remove(key)
-                    # 選択集合からも外す
-                    self.sel.discard(hit.track_id, hit.key_id)
-                    self.on_timeline_changed()
-                    self.on_selection_changed()
+                if not key:
+                    return
+                self._dragging_key = None
+                self._drag_start_tv = None
+                self.sel.discard(hit.track_id, hit.key_id)
+                if self.delete_key_cb:
+                    self.delete_key_cb(key)  
+                else:
+                    # フォールバック（Undoなし直書き）
+                    if key in self.timeline.track.keys:
+                        self.timeline.track.keys.remove(key)
+                self.on_changed()
+                return
+            except Exception as e:
+                import traceback
+                print("[RC-DELETE ERROR]", e)
+                traceback.print_exc()
+                return
