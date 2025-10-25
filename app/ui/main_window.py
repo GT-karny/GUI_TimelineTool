@@ -59,17 +59,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.set_timeline(self.timeline)
 
         self.undo = QUndoStack(self)
-        self.sc_undo = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self)
-        self.sc_undo.setContext(QtCore.Qt.ApplicationShortcut)
-        self.sc_undo.activated.connect(self.undo.undo)
-
-        self.sc_redo_y = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Y"), self)
-        self.sc_redo_y.setContext(QtCore.Qt.ApplicationShortcut)
-        self.sc_redo_y.activated.connect(self.undo.redo)
-
-        self.sc_redo_shiftz = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+Z"), self)
-        self.sc_redo_shiftz.setContext(QtCore.Qt.ApplicationShortcut)
-        self.sc_redo_shiftz.activated.connect(self.undo.redo)
         # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
         self.act_undo = self.undo.createUndoAction(self, "Undo")
         self.act_redo = self.undo.createRedoAction(self, "Redo")
