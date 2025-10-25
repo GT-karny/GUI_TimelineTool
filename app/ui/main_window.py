@@ -1,7 +1,8 @@
 # ui/main_window.py
 from __future__ import annotations
 from typing import Set, List, Optional
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6.QtGui import QUndoStack, QKeySequence
 import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode
@@ -15,6 +16,11 @@ from ..interaction.selection import SelectionManager
 from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
 
+
+from ..actions.undo_commands import (
+    AddKeyCommand, DeleteKeysCommand, MoveKeyCommand,
+    SetKeyTimeCommand, SetKeyValueCommand
+)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -52,6 +58,34 @@ class MainWindow(QtWidgets.QMainWindow):
         # モデル→ビュー注入
         self.plotw.set_timeline(self.timeline)
 
+        self.undo = QUndoStack(self)
+        self.sc_undo = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self)
+        self.sc_undo.setContext(QtCore.Qt.ApplicationShortcut)
+        self.sc_undo.activated.connect(self.undo.undo)
+
+        self.sc_redo_y = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Y"), self)
+        self.sc_redo_y.setContext(QtCore.Qt.ApplicationShortcut)
+        self.sc_redo_y.activated.connect(self.undo.redo)
+
+        self.sc_redo_shiftz = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+Z"), self)
+        self.sc_redo_shiftz.setContext(QtCore.Qt.ApplicationShortcut)
+        self.sc_redo_shiftz.activated.connect(self.undo.redo)
+        # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
+        self.act_undo = self.undo.createUndoAction(self, "Undo")
+        self.act_redo = self.undo.createRedoAction(self, "Redo")
+        # 念のためアプリケーションスコープで効くように
+        self.act_undo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
+        self.act_redo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
+        self.addAction(self.act_undo)
+        self.addAction(self.act_redo)
+
+        # ついでにUndo/Redoのたびに再描画
+        self.undo.indexChanged.connect(self._refresh_view)
+        self.undo.indexChanged.connect(lambda _: print(
+            f"[UNDO DEBUG] index={self.undo.index()} / count={self.undo.count()} / clean={self.undo.isClean()}"
+        ))
+
+
         # --- Selection / Mouse 配線 ---
         self._pos_provider = SingleTrackPosProvider(self.plotw.plot, self.timeline.track, track_id=0)
         self.sel = SelectionManager(self.plotw.plot.scene(), self._pos_provider)
@@ -62,6 +96,12 @@ class MainWindow(QtWidgets.QMainWindow):
             pos_provider=self._pos_provider,
             on_changed=self._refresh_view,
             set_playhead=self.plotw.set_playhead,
+            commit_drag=lambda key, before, after: self.undo.push(
+                MoveKeyCommand(self.timeline, key, before, after)
+            ),
+            # ▼ 追加：右クリック/ダブルクリックの Add/Delete を Undo に積む
+            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(AddKeyCommand(self.timeline, t, v)),
+            delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
         )
 
 
@@ -93,6 +133,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
+
+
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
         self.timeline.track.interp = {
@@ -112,19 +154,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
+        # 仕様：補間値を初期値に
         v = float(evaluate(self.timeline.track, np.array([t]))[0])
-        kf = Keyframe(float(max(0.0, t)), v)
-        self.timeline.track.keys.append(kf)
-        self.timeline.track.clamp_times()
-        self.sel.set_single(0, id(kf))
+        cmd = AddKeyCommand(self.timeline, t, v)
+        self.undo.push(cmd)
+        # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
+        kf = cmd.k
+        if kf is not None:
+            self.sel.set_single(0, id(kf))
         self._refresh_view()
 
     def _on_delete_selected(self):
-        if not self.sel.selected:
-            return
         key_ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        if key_ids:
-            self.timeline.track.keys = [k for k in self.timeline.track.keys if id(k) not in key_ids]
+        if not key_ids:
+            return
+        targets = [k for k in self.timeline.track.keys if id(k) in key_ids]
+        if not targets:
+            return
+        self.undo.push(DeleteKeysCommand(self.timeline, targets))
         self.sel.clear()
         self._refresh_view()
 
@@ -151,28 +198,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- Inspector handlers --------------------
     def _on_inspector_time(self, t_new: float):
-        """インスペクタから時刻編集。単一選択なら1件、複数選択なら全件に適用。"""
-        key_list = self._selected_keys()
-        if not key_list:
+        keys = self._selected_keys()
+        if len(keys) != 1:
             return
+        k = keys[0]
         t_new = float(max(0.0, t_new))
-        if len(key_list) == 1:
-            key_list[0].t = t_new
-        else:
-            # 複数選択：全て同じ t に（要件に合わせてオフセット維持に変えることも可）
-            for k in key_list:
-                k.t = t_new
-        self.timeline.track.clamp_times()
+        if abs(k.t - t_new) < 1e-12:
+            return
+        self.undo.push(SetKeyTimeCommand(self.timeline, k, old_t=k.t, new_t=t_new))
         self._refresh_view()
 
     def _on_inspector_value(self, v_new: float):
-        """インスペクタから値編集。単一/複数選択ともに値を適用。"""
-        key_list = self._selected_keys()
-        if not key_list:
+        keys = self._selected_keys()
+        if len(keys) != 1:
             return
+        k = keys[0]
         v_new = float(v_new)
-        for k in key_list:
-            k.v = v_new
+        if abs(k.v - v_new) < 1e-12:
+            return
+        self.undo.push(SetKeyValueCommand(k, old_v=k.v, new_v=v_new))
         self._refresh_view()
 
     # -------------------- Playback tick（暫定） --------------------
