@@ -1,8 +1,8 @@
 # ui/main_window.py
 from __future__ import annotations
 from typing import Set, List, Optional
-from PySide6 import QtWidgets, QtCore, QtGui
-from PySide6.QtGui import QUndoStack, QKeySequence
+from PySide6 import QtWidgets, QtCore
+from PySide6.QtGui import QUndoStack
 import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode
