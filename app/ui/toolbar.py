@@ -1,0 +1,104 @@
+# ui/toolbar.py
+from __future__ import annotations
+from PySide6 import QtWidgets, QtCore
+
+
+class TimelineToolbar(QtWidgets.QToolBar):
+    # ---- 外向きシグナル ----
+    sig_interp_changed = QtCore.Signal(str)     # "cubic" | "linear" | "step"
+    sig_duration_changed = QtCore.Signal(float) # seconds
+    sig_rate_changed = QtCore.Signal(float)     # Hz
+    sig_add = QtCore.Signal()
+    sig_delete = QtCore.Signal()
+    sig_reset = QtCore.Signal()
+    sig_export = QtCore.Signal()
+    sig_play = QtCore.Signal()
+    sig_stop = QtCore.Signal()
+    sig_fitx = QtCore.Signal()
+    sig_fity = QtCore.Signal()
+
+    def __init__(self, duration_s: float, sample_rate_hz: float, parent=None):
+        super().__init__(parent)
+
+        # --- Widgets ---
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItems(["cubic", "linear", "step"])
+
+        self.duration = QtWidgets.QDoubleSpinBox()
+        self.duration.setRange(0.1, 10000.0)
+        self.duration.setDecimals(3)
+        self.duration.setValue(duration_s)
+        self.duration.setSuffix(" s")
+
+        self.rate = QtWidgets.QDoubleSpinBox()
+        self.rate.setRange(1.0, 1000.0)
+        self.rate.setDecimals(1)
+        self.rate.setValue(sample_rate_hz)
+        self.rate.setSuffix(" Hz")
+
+        self.btn_add = QtWidgets.QPushButton("+")
+        self.btn_del = QtWidgets.QPushButton("-")
+        self.btn_reset = QtWidgets.QPushButton("Reset")
+        self.btn_export = QtWidgets.QPushButton("Export CSV")
+        self.btn_play = QtWidgets.QPushButton("▶")
+        self.btn_stop = QtWidgets.QPushButton("■")
+        self.btn_fitx = QtWidgets.QPushButton("|-|")
+        self.btn_fity = QtWidgets.QPushButton("工")
+
+        self.btn_add.setToolTip("Add Key @Cursor")
+        self.btn_del.setToolTip("Delete Selected")
+        self.btn_fitx.setToolTip("Fit X Axis")
+        self.btn_fity.setToolTip("Fit Y Axis")
+
+        for b in (self.btn_add, self.btn_del, self.btn_fitx, self.btn_fity):
+            b.setFixedSize(30, 24)   # ぴったりサイズに固定
+
+        # --- Layout on toolbar ---
+        self.addWidget(QtWidgets.QLabel("Interpolation: "))
+        self.addWidget(self.mode_combo)
+        self.addSeparator()
+
+        self.addWidget(QtWidgets.QLabel("Duration: "))
+        self.addWidget(self.duration)
+
+        self.addWidget(QtWidgets.QLabel("Sample: "))
+        self.addWidget(self.rate)
+        self.addSeparator()
+
+        for b in (self.btn_add, self.btn_del, self.btn_reset, self.btn_export,
+                  self.btn_play, self.btn_stop, self.btn_fitx, self.btn_fity):
+            self.addWidget(b)
+
+        # --- Wiring (emit clean signals only) ---
+        self.mode_combo.currentTextChanged.connect(self.sig_interp_changed)
+        self.duration.valueChanged.connect(self.sig_duration_changed)
+        self.rate.valueChanged.connect(self.sig_rate_changed)
+        self.btn_add.clicked.connect(self.sig_add.emit)
+        self.btn_del.clicked.connect(self.sig_delete.emit)
+        self.btn_reset.clicked.connect(self.sig_reset.emit)
+        self.btn_export.clicked.connect(self.sig_export.emit)
+        self.btn_play.clicked.connect(self.sig_play.emit)
+        self.btn_stop.clicked.connect(self.sig_stop.emit)
+        self.btn_fitx.clicked.connect(self.sig_fitx.emit)
+        self.btn_fity.clicked.connect(self.sig_fity.emit)
+
+    # ---- Optional: 外部からの更新用ヘルパ ----
+    def set_interp(self, name: str) -> None:
+        """'cubic'|'linear'|'step' をUIに反映（signalは出さない）。"""
+        i = self.mode_combo.findText(name)
+        if i >= 0:
+            # note: setCurrentIndexはcurrentTextChangedを発火するので、
+            # 外部からのUI同期で signal を抑えたい場合は blockSignals を使う。
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(i)
+            self.mode_combo.blockSignals(False)
+
+    def set_duration(self, seconds: float) -> None:
+        self.duration.blockSignals(True)
+        self.duration.setValue(float(seconds))
+        self.duration.blockSignals(False)
+
+    def set_rate(self, hz: float) -> None:
+        self.rate.blockSignals(True)
+        self.rate.setValue(float(hz))
+        self.rate.blockSignals(False)
