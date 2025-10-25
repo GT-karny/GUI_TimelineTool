@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Set, List, Optional
 from PySide6 import QtWidgets, QtCore
-from PySide6.QtGui import QUndoStack
+from PySide6.QtGui import QKeySequence, QUndoStack
 import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode
@@ -62,6 +62,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
         self.act_undo = self.undo.createUndoAction(self, "Undo")
         self.act_redo = self.undo.createRedoAction(self, "Redo")
+        self.act_undo.setShortcuts(QKeySequence.StandardKey.Undo)
+        self.act_redo.setShortcuts(QKeySequence.StandardKey.Redo)
         # 念のためアプリケーションスコープで効くように
         self.act_undo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
         self.act_redo.setShortcutContext(QtCore.Qt.ApplicationShortcut)
