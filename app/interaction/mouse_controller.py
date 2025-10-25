@@ -26,15 +26,19 @@ class MouseController(QtCore.QObject):
         timeline: Timeline,
         selection: SelectionManager,
         pos_provider: KeyPosProvider,
-        on_changed: Callable[[], None],         # モデル変更後の再描画トリガ
-        set_playhead: Callable[[float], None],  # プレイヘッド更新
+        on_timeline_preview: Callable[[], None],   # 操作中の即時更新
+        on_timeline_changed: Callable[[], None],   # モデル変更確定後の再描画トリガ
+        on_selection_changed: Callable[[], None],  # 選択変更時の再描画トリガ
+        set_playhead: Callable[[float], None],     # プレイヘッド更新
     ):
         super().__init__()
         self.plot = plot_widget
         self.timeline = timeline
         self.sel = selection
         self.provider = pos_provider
-        self.on_changed = on_changed
+        self.on_timeline_preview = on_timeline_preview
+        self.on_timeline_changed = on_timeline_changed
+        self.on_selection_changed = on_selection_changed
         self.set_playhead = set_playhead
 
         # 状態
@@ -93,12 +97,12 @@ class MouseController(QtCore.QObject):
                 else:
                     self.sel.set_single(hit.track_id, hit.key_id)
                 self._dragging_key = hit
-                self.on_changed()
+                self.on_selection_changed()
             else:
                 # 空白：選択が存在すれば解除、なければプレイヘッド移動
                 if self.sel.selected:
                     self.sel.clear()
-                    self.on_changed()
+                    self.on_selection_changed()
                 else:
                     vp = self._scene_to_view(ev.scenePos())
                     self.set_playhead(max(0.0, float(vp.x())))
@@ -115,19 +119,23 @@ class MouseController(QtCore.QObject):
                     k.t = float(max(0.0, mp.x()))
                     k.v = float(mp.y())
                     self.timeline.track.clamp_times()
-                    self.on_changed()
+                    self.on_timeline_preview()
                 return True
             # マルキー更新
             self.sel.marquee_update(ev.scenePos())
-            self.on_changed()
+            self.on_selection_changed()
             return True
 
         if et == QtCore.QEvent.GraphicsSceneMouseRelease and ev.button() == Qt.LeftButton:
             self._left_down = False
+            was_dragging = self._dragging_key is not None
             self._dragging_key = None
             # Shift押下なら加算選択
             self.sel.marquee_commit(additive=self._is_shift(ev))
-            self.on_changed()
+            if was_dragging:
+                self.on_timeline_changed()
+            else:
+                self.on_selection_changed()
             return True
 
         # 左ダブルクリック：カーソル位置にキー追加（スケール無関係）
@@ -139,7 +147,8 @@ class MouseController(QtCore.QObject):
             self.timeline.track.keys.append(kf)
             self.timeline.track.clamp_times()
             self.sel.set_single(0, id(kf))  # 単一トラック: track_id=0
-            self.on_changed()
+            self.on_timeline_changed()
+            self.on_selection_changed()
             return True
 
         # ---------------- 中ボタン（パン） ----------------
@@ -236,7 +245,8 @@ class MouseController(QtCore.QObject):
             self.timeline.track.clamp_times()
             # 新規キーを単一選択に
             self.sel.set_single(0, id(kf))  # track_id=0（単一トラック暫定）
-            self.on_changed()
+            self.on_timeline_changed()
+            self.on_selection_changed()
 
         elif chosen is act_del:
             # 近傍点を1つ削除
@@ -247,4 +257,5 @@ class MouseController(QtCore.QObject):
                     self.timeline.track.keys.remove(key)
                     # 選択集合からも外す
                     self.sel.discard(hit.track_id, hit.key_id)
-                    self.on_changed()
+                    self.on_timeline_changed()
+                    self.on_selection_changed()
