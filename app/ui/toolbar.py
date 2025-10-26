@@ -17,6 +17,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
     sig_fitx = QtCore.Signal()
     sig_fity = QtCore.Signal()
     sig_loop_toggled = QtCore.Signal(bool)
+    sig_seek_start = QtCore.Signal()
 
     def __init__(self, duration_s: float, sample_rate_hz: float, parent=None):
         super().__init__(parent)
@@ -45,6 +46,8 @@ class TimelineToolbar(QtWidgets.QToolBar):
         self.btn_loop.setCheckable(True)
         self.btn_loop.setToolTip("Loop playback")
         self.btn_loop.setShortcut(QtGui.QKeySequence("L"))
+        self.btn_seek_start = QtWidgets.QPushButton("⏮")
+        self.btn_seek_start.setToolTip("Move playhead to start")
         self.btn_play = QtWidgets.QPushButton("▶")
         self.btn_stop = QtWidgets.QPushButton("■")
         self.btn_fitx = QtWidgets.QPushButton("|-|")
@@ -71,7 +74,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
         self.addSeparator()
 
         for b in (self.btn_add, self.btn_del, self.btn_reset, self.btn_export,
-                  self.btn_loop, self.btn_play, self.btn_stop, self.btn_fitx, self.btn_fity):
+                  self.btn_loop, self.btn_seek_start, self.btn_play, self.btn_stop, self.btn_fitx, self.btn_fity):
             self.addWidget(b)
 
         # --- Wiring (emit clean signals only) ---
@@ -83,6 +86,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
         self.btn_reset.clicked.connect(self.sig_reset.emit)
         self.btn_export.clicked.connect(self.sig_export.emit)
         self.btn_loop.toggled.connect(self.sig_loop_toggled.emit)
+        self.btn_seek_start.clicked.connect(self.sig_seek_start.emit)
         self.btn_play.clicked.connect(self.sig_play.emit)
         self.btn_stop.clicked.connect(self.sig_stop.emit)
         self.btn_fitx.clicked.connect(self.sig_fitx.emit)

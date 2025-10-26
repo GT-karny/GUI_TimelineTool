@@ -157,6 +157,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_reset.connect(self._on_reset)
         self.toolbar.sig_export.connect(self._on_export_csv)
         self.toolbar.sig_loop_toggled.connect(self._on_loop_toggled)
+        self.toolbar.sig_seek_start.connect(self._on_seek_start)
         self.toolbar.sig_play.connect(self._on_play)
         self.toolbar.sig_stop.connect(self._on_stop)
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
@@ -192,6 +193,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_loop_toggled(self, enabled: bool) -> None:
         self.playback.loop_enabled = bool(enabled)
+
+    def _on_seek_start(self) -> None:
+        self.playback.set_playhead(0.0)
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
