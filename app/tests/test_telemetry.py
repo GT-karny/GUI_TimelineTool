@@ -98,16 +98,24 @@ def test_telemetry_bridge_sends_only_when_enabled_and_playing():
     bridge = TelemetryBridge(qsettings)
     try:
         receiver.settimeout(0.2)
-        bridge.maybe_send_frame(False, 10, 1, [{"name": "Track", "value": 1.0}])
+        bridge.update_snapshot(False, 10, 1, [{"name": "Track", "value": 1.0}])
         with pytest.raises(socket.timeout):
             receiver.recvfrom(1024)
 
-        bridge.maybe_send_frame(True, 20, 2, [{"name": "Track", "value": 2.0}])
+        bridge.update_snapshot(True, 20, 2, [{"name": "Track", "value": 2.0}])
         receiver.settimeout(1.0)
         data, _ = receiver.recvfrom(2048)
         payload = json.loads(data)
         assert payload["frame_index"] == 2
         assert payload["tracks"][0]["value"] == pytest.approx(2.0)
+
+        bridge.update_snapshot(False, 25, 2, [{"name": "Track", "value": 2.0}])
+        receiver.settimeout(0.05)
+        while True:
+            try:
+                receiver.recvfrom(2048)
+            except socket.timeout:
+                break
 
         bridge.apply_settings(
             TelemetrySettings(
@@ -118,7 +126,7 @@ def test_telemetry_bridge_sends_only_when_enabled_and_playing():
                 session_id="session-test",
             )
         )
-        bridge.maybe_send_frame(True, 30, 3, [{"name": "Track", "value": 3.0}])
+        bridge.update_snapshot(True, 30, 3, [{"name": "Track", "value": 3.0}])
         receiver.settimeout(0.2)
         with pytest.raises(socket.timeout):
             receiver.recvfrom(1024)
