@@ -3,6 +3,7 @@ __pycache__/
 dist/
 build/
 *.spec
+!tools/timeline_tool.spec
 venv/
 *.csv
 output/
