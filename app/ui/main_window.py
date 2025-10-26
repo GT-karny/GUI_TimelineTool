@@ -17,6 +17,8 @@ from .inspector import KeyInspector  # ★ 追加
 from ..interaction.selection import SelectionManager
 from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
+from ..playback.telemetry_bridge import TelemetryBridge
+from ..telemetry.settings import TelemetrySettings
 
 
 from ..actions.undo_commands import (
@@ -35,6 +37,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timeline = Timeline()
         self.sample_rate_hz: float = 90.0
         self._current_project_path: Optional[Path] = None
+        self._app_settings = QtCore.QSettings("TimelineTool", "TimelineTool")
+        self.telemetry_bridge = TelemetryBridge(self._app_settings)
+        self._telemetry_frame_index = 0
+        self._telemetry_ui_updating = False
 
         # --- Toolbar ---
         self.toolbar = TimelineToolbar(self.timeline.duration_s, self.sample_rate_hz)
@@ -51,6 +57,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ★ インスペクタをツールバー下に配置
         self.inspector = KeyInspector()
+        self.telemetry_group = QtWidgets.QGroupBox("Telemetry")
+        telemetry_form = QtWidgets.QFormLayout(self.telemetry_group)
+        telemetry_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self.telemetry_enabled = QtWidgets.QCheckBox("Enable UDP telemetry")
+        telemetry_form.addRow(self.telemetry_enabled)
+
+        self.telemetry_ip = QtWidgets.QLineEdit()
+        self.telemetry_ip.setPlaceholderText("127.0.0.1")
+        telemetry_form.addRow("IP", self.telemetry_ip)
+
+        self.telemetry_port = QtWidgets.QSpinBox()
+        self.telemetry_port.setRange(1, 65535)
+        telemetry_form.addRow("Port", self.telemetry_port)
+
+        self.telemetry_rate = QtWidgets.QSpinBox()
+        self.telemetry_rate.setRange(1, 240)
+        telemetry_form.addRow("Rate (Hz)", self.telemetry_rate)
+
+        self.telemetry_session = QtWidgets.QLineEdit()
+        self.telemetry_session.setPlaceholderText("Leave blank for auto")
+        telemetry_form.addRow("Session ID", self.telemetry_session)
+
+        vbox.addWidget(self.telemetry_group)
         vbox.addWidget(self.inspector)
 
         # プロットを下に
@@ -133,6 +163,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
         self._update_window_title()
+        self._connect_telemetry_ui()
+        self._sync_telemetry_ui()
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
@@ -191,6 +223,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_play(self):
         self._t0 = QtCore.QTime.currentTime()
         self._timer.start(int(1000 / self._play_fps))
+        self._telemetry_frame_index = 0
 
     def _on_stop(self):
         self._timer.stop()
@@ -225,6 +258,11 @@ class MainWindow(QtWidgets.QMainWindow):
         elapsed = self._t0.msecsTo(QtCore.QTime.currentTime()) / 1000.0
         t = elapsed % max(1e-6, self.timeline.duration_s)
         self.plotw.set_playhead(t)
+        playing = self._timer.isActive()
+        frame_index = self._telemetry_frame_index
+        self._send_telemetry_frame(playing, t, frame_index)
+        if playing:
+            self._telemetry_frame_index = frame_index + 1
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
@@ -246,6 +284,58 @@ class MainWindow(QtWidgets.QMainWindow):
     def _selected_keys(self) -> List[Keyframe]:
         ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
         return [k for k in self.timeline.track.sorted() if id(k) in ids]
+
+    def _connect_telemetry_ui(self) -> None:
+        self.telemetry_enabled.toggled.connect(self._on_telemetry_setting_changed)
+        self.telemetry_ip.editingFinished.connect(self._on_telemetry_setting_changed)
+        self.telemetry_port.valueChanged.connect(self._on_telemetry_setting_changed)
+        self.telemetry_rate.valueChanged.connect(self._on_telemetry_setting_changed)
+        self.telemetry_session.editingFinished.connect(self._on_telemetry_setting_changed)
+
+    def _sync_telemetry_ui(self) -> None:
+        settings = self.telemetry_bridge.settings
+        self._telemetry_ui_updating = True
+        try:
+            self.telemetry_enabled.setChecked(settings.enabled)
+            self.telemetry_ip.setText(settings.ip)
+            self.telemetry_port.setValue(int(settings.port))
+            self.telemetry_rate.setValue(int(settings.rate_hz))
+            session_text = settings.session_id or self.telemetry_bridge.assembler.session_id
+            self.telemetry_session.setText(session_text)
+        finally:
+            self._telemetry_ui_updating = False
+
+    def _current_telemetry_settings(self) -> TelemetrySettings:
+        session_text = self.telemetry_session.text().strip()
+        return TelemetrySettings(
+            enabled=self.telemetry_enabled.isChecked(),
+            ip=self.telemetry_ip.text().strip() or "127.0.0.1",
+            port=int(self.telemetry_port.value()),
+            rate_hz=int(self.telemetry_rate.value()),
+            session_id=session_text or None,
+        )
+
+    def _on_telemetry_setting_changed(self) -> None:
+        if self._telemetry_ui_updating:
+            return
+        settings = self._current_telemetry_settings()
+        self.telemetry_bridge.apply_settings(settings)
+        self._sync_telemetry_ui()
+
+    def _send_telemetry_frame(self, playing: bool, playhead_s: float, frame_index: int) -> None:
+        track = self.timeline.track
+        values = evaluate(track, np.array([playhead_s], dtype=float))
+        snapshots = [{"name": track.name, "value": float(values[0])}]
+        self.telemetry_bridge.maybe_send_frame(
+            playing=playing,
+            playhead_ms=int(playhead_s * 1000),
+            frame_index=frame_index,
+            track_snapshots=snapshots,
+        )
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.telemetry_bridge.shutdown()
+        super().closeEvent(event)
 
     # -------------------- File menu helpers --------------------
     def _build_menu(self) -> None:
