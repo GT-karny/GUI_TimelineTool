@@ -8,6 +8,7 @@ from app.net.udp_sender import Endpoint, UdpSenderService
 from app.telemetry.assembler import TelemetryAssembler
 from app.telemetry.settings import TelemetrySettings, load_settings, save_settings
 from app.playback.telemetry_bridge import TelemetryBridge
+from app.version import APP_VERSION
 
 
 class DummySettings:
@@ -33,7 +34,7 @@ def test_telemetry_assembler_builds_expected_payload():
     )
     decoded = json.loads(payload.decode("utf-8"))
     assert decoded == {
-        "version": "1.0",
+        "version": APP_VERSION,
         "session_id": "fixed",
         "timestamp_ms": 123,
         "frame_index": 5,

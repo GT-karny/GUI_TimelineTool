@@ -6,10 +6,10 @@
 - **デフォルト送信先**: `127.0.0.1:9000`
 - **レート指定**: 設定パネルの「Rate (Hz)」で 1〜240 Hz の整数を指定。UI 上の表示は内部ガバナーへ即時反映されます。
 
-## JSON フォーマット (v1.0)
+## JSON フォーマット (v0.6.0)
 | フィールド | 型 | 説明 |
 | ---------- | --- | ---- |
-| `version` | string | プロトコルバージョン。現在は常に `"1.0"` |
+| `version` | string | プロトコルバージョン。現在は常に `"0.6.0"` |
 | `session_id` | string | 送信セッション識別子。未設定時は起動毎に自動生成 |
 | `timestamp_ms` | integer | タイムライン内の現在位置（ミリ秒） |
 | `frame_index` | integer | 再生開始からのフレーム数 (0 起点) |
@@ -18,7 +18,7 @@
 ### サンプルペイロード
 ```json
 {
-  "version": "1.0",
+  "version": "0.6.0",
   "session_id": "demo-session",
   "timestamp_ms": 1320,
   "frame_index": 33,
@@ -57,7 +57,7 @@
 4. タイムラインを再生すると、受信側に JSON が 1 行ずつ表示されます。
    例:
    ```text
-   {'version': '1.0', 'session_id': 'demo-session', 'timestamp_ms': 1320, 'frame_index': 33, 'tracks': [{'name': 'camera.fov', 'value': 65.0}]}
+   {'version': '0.6.0', 'session_id': 'demo-session', 'timestamp_ms': 1320, 'frame_index': 33, 'tracks': [{'name': 'camera.fov', 'value': 65.0}]}
    ```
 
 ## 制限事項とベストプラクティス

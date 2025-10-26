@@ -5,6 +5,8 @@ import json
 import uuid
 from typing import Iterable, Mapping
 
+from app.version import APP_VERSION
+
 
 class TelemetryAssembler:
     """Builds compact JSON telemetry payloads."""
@@ -21,7 +23,7 @@ class TelemetryAssembler:
         """Convert timeline data into a JSON payload."""
 
         doc = {
-            "version": "1.0",
+            "version": APP_VERSION,
             "session_id": self.session_id,
             "timestamp_ms": int(playhead_ms),
             "frame_index": int(frame_index),
