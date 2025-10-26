@@ -1,12 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build specification for the TimelineTool GUI application."""
 
+import inspect
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SPEC_PATH = Path(inspect.getfile(inspect.currentframe())).resolve()
+PROJECT_ROOT = SPEC_PATH.parent.parent
 
 block_cipher = None
 
