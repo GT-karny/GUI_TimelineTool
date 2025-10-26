@@ -17,6 +17,7 @@ from .inspector import KeyInspector  # ★ 追加
 from ..interaction.selection import SelectionManager
 from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
+from ..playback.controller import PlaybackController
 from ..playback.telemetry_bridge import TelemetryBridge
 from ..telemetry.settings import TelemetrySettings
 
@@ -48,6 +49,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Plot (center) ---
         self.plotw = TimelinePlot(self)
+
+        # --- Playback controller ---
+        self.playback = PlaybackController(self.timeline, self._app_settings)
+        self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
+        self.playback.playing_changed.connect(self._on_playback_state_changed)
+        self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
         # 中央コンテナ
         central = QtWidgets.QWidget(self)
@@ -122,7 +129,7 @@ class MainWindow(QtWidgets.QMainWindow):
             selection=self.sel,
             pos_provider=self._pos_provider,
             on_changed=self._refresh_view,
-            set_playhead=self.plotw.set_playhead,
+            set_playhead=self.playback.set_playhead,
             commit_drag=lambda key, before, after: self.undo.push(
                 MoveKeyCommand(self.timeline, key, before, after)
             ),
@@ -135,12 +142,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Inspector signals -> apply edits
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
-
-        # --- Playback（暫定: 内蔵タイマー） ---
-        self._timer = QtCore.QTimer(self)
-        self._timer.timeout.connect(self._on_tick)
-        self._t0: Optional[QtCore.QTime] = None
-        self._play_fps = 60
 
         # --- 初期描画・レンジ ---
         self._refresh_view()
@@ -155,6 +156,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_delete.connect(self._on_delete_selected)
         self.toolbar.sig_reset.connect(self._on_reset)
         self.toolbar.sig_export.connect(self._on_export_csv)
+        self.toolbar.sig_loop_toggled.connect(self._on_loop_toggled)
+        self.toolbar.sig_seek_start.connect(self._on_seek_start)
         self.toolbar.sig_play.connect(self._on_play)
         self.toolbar.sig_stop.connect(self._on_stop)
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
@@ -165,6 +168,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_window_title()
         self._connect_telemetry_ui()
         self._sync_telemetry_ui()
+
+        # 初期プレイヘッドを同期
+        self.playback.set_playhead(0.0)
+        self.toolbar.set_loop(self.playback.loop_enabled)
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
@@ -178,10 +185,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_duration_changed(self, seconds: float):
         self.timeline.set_duration(float(seconds))
         self.plotw.fit_x()
+        self.playback.clamp_to_duration()
         self._refresh_view()
 
     def _on_rate_changed(self, hz: float):
         self.sample_rate_hz = float(hz)
+
+    def _on_loop_toggled(self, enabled: bool) -> None:
+        self.playback.loop_enabled = bool(enabled)
+
+    def _on_seek_start(self) -> None:
+        self.playback.set_playhead(0.0)
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
@@ -221,12 +235,10 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Export", f"Exported to:\n{path}")
 
     def _on_play(self):
-        self._t0 = QtCore.QTime.currentTime()
-        self._timer.start(int(1000 / self._play_fps))
-        self._telemetry_frame_index = 0
+        self.playback.play()
 
     def _on_stop(self):
-        self._timer.stop()
+        self.playback.stop()
 
     # -------------------- Inspector handlers --------------------
     def _on_inspector_time(self, t_new: float):
@@ -251,18 +263,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.push(SetKeyValueCommand(k, old_v=k.v, new_v=v_new))
         self._refresh_view()
 
-    # -------------------- Playback tick（暫定） --------------------
-    def _on_tick(self):
-        if self._t0 is None:
-            return
-        elapsed = self._t0.msecsTo(QtCore.QTime.currentTime()) / 1000.0
-        t = elapsed % max(1e-6, self.timeline.duration_s)
-        self.plotw.set_playhead(t)
-        playing = self._timer.isActive()
-        frame_index = self._telemetry_frame_index
-        self._send_telemetry_frame(playing, t, frame_index)
+    # -------------------- Playback callbacks --------------------
+    def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
+        self.plotw.set_playhead(playhead_s)
+        self._publish_telemetry_snapshot(playhead_s, playing, advance_frame=playing)
+
+    def _on_playback_state_changed(self, playing: bool) -> None:
         if playing:
-            self._telemetry_frame_index = frame_index + 1
+            self._telemetry_frame_index = 0
+        self._publish_telemetry_snapshot(self.playback.playhead, playing, advance_frame=False)
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
@@ -322,11 +331,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telemetry_bridge.apply_settings(settings)
         self._sync_telemetry_ui()
 
+    def _publish_telemetry_snapshot(self, playhead_s: float, playing: bool, *, advance_frame: bool) -> None:
+        frame_index = self._telemetry_frame_index
+        self._send_telemetry_frame(playing, playhead_s, frame_index)
+        if advance_frame:
+            self._telemetry_frame_index = frame_index + 1
+
     def _send_telemetry_frame(self, playing: bool, playhead_s: float, frame_index: int) -> None:
         track = self.timeline.track
         values = evaluate(track, np.array([playhead_s], dtype=float))
         snapshots = [{"name": track.name, "value": float(values[0])}]
-        self.telemetry_bridge.maybe_send_frame(
+        self.telemetry_bridge.update_snapshot(
             playing=playing,
             playhead_ms=int(playhead_s * 1000),
             frame_index=frame_index,
@@ -373,6 +388,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sample_rate_hz = float(sample_rate)
 
         self.plotw.set_timeline(self.timeline)
+        self.playback.set_timeline(self.timeline)
         self._pos_provider.track = self.timeline.track
         self.mouse.timeline = self.timeline
         self.sel.clear()
@@ -384,7 +400,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.set_interp(self.timeline.track.interp.value)
         self.toolbar.set_rate(self.sample_rate_hz)
 
-        self.plotw.set_playhead(0.0)
+        self.playback.set_playhead(0.0)
         self.plotw.fit_x()
         self.plotw.fit_y(0.15)
         self._refresh_view()
