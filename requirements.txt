@@ -2,3 +2,12 @@ PySide6
 pyqtgraph
 numpy
 scipy
+
+# Testing
+pytest
+pytest-qt
+
+# Development tooling
+black
+isort
+mypy

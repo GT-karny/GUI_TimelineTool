@@ -1,5 +1,7 @@
 # interaction/mouse_controller.py
 from __future__ import annotations
+
+import logging
 from typing import Optional, Callable
 import numpy as np
 from PySide6 import QtCore, QtWidgets
@@ -9,6 +11,9 @@ import pyqtgraph as pg
 from ..core.timeline import Timeline, Keyframe
 from ..core.interpolation import evaluate
 from .selection import SelectionManager, KeyPoint, KeyPosProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class MouseController(QtCore.QObject):
@@ -292,8 +297,6 @@ class MouseController(QtCore.QObject):
                         self.timeline.track.keys.remove(key)
                 self.on_changed()
                 return
-            except Exception as e:
-                import traceback
-                print("[RC-DELETE ERROR]", e)
-                traceback.print_exc()
+            except Exception:
+                logger.exception("Failed to delete keyframe from context menu")
                 return

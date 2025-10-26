@@ -1,29 +1,38 @@
 # アーキテクチャ概要
 
-## 目的とスコープ
-GUI Timeline Tool は、複数トラックのキーフレームを編集し、リアルタイムに再生・外部出力することを目的としたデスクトップアプリケーションです。本書はアプリ全体の構造と主要コンポーネントの関係を概観します。ハードリアルタイム性や 3D 描画機能はスコープ外です。
+## スコープと現状
+GUI Timeline Tool は単一 Float トラックを編集して再生・エクスポートするデスクトップアプリケーションです。PySide6 と pyqtgraph を用いて UI を構築しており、トラックは `app/core` に定義されたシンプルなデータモデル (`Timeline` → `Track` → `Keyframe`) で管理されます。
 
-## コンポーネント
-| コンポーネント | 主な責務 |
-| -------------- | -------- |
-| UI (app/ui) | Qt Widgets を用いた表示・操作。ツールバー、タイムラインエディタ、設定ダイアログを提供。 |
-| Playback (app/playback) | タイムラインデータモデル、補間ロジック、再生状態管理。UI からの操作を受け取り現在値を算出。 |
-| Telemetry (app/telemetry) | 再生中の値を JSON に整形し、送信キューへ渡す。セッション管理を含む。 |
-| Network (app/net) | UDP 送信スレッドと高精度スケジューラ。負荷分散とレート制御を担当。 |
-| IO (app/io) | CSV エクスポートなど外部ファイル連携。 |
-| Settings (QSettings) | ユーザー設定の保存・復元を司る。 |
+## 主なモジュールと責務
+| モジュール | 役割 |
+| ---------- | ---- |
+| `app/ui` | `MainWindow`、タイムライン描画 (`TimelinePlot`)、Inspector、ツールバーなどのウィジェットを提供。 |
+| `app/core` | タイムライン・トラック・キーフレームのデータモデルと補間 (`core/interpolation.py`) を実装。 |
+| `app/interaction` | マウス操作と選択状態 (`MouseController`, `SelectionManager`) を管理。 |
+| `app/actions` | Undo/Redo に利用する `QUndoCommand` 実装をまとめる。 |
+| `app/playback` | 再生制御 (`PlaybackController`) と Telemetry 連携 (`telemetry_bridge.py`) を担当。 |
+| `app/telemetry` | Telemetry の設定保持 (`settings.py`) と JSON ペイロード生成 (`assembler.py`)。 |
+| `app/net` | 非同期 UDP 送信 (`udp_sender.py`) の軽量サービス。 |
+| `app/io` | CSV エクスポートとプロジェクト保存/読込ユーティリティ。 |
+| `app/tests` | コアロジックと GUI のスモークテスト。 |
 
-## 時間管理とスレッドモデル
-- UI スレッド: Qt のメインスレッド。ユーザー操作、タイムライン描画、再生開始/停止のトリガーを担当します。
-- 再生ループ: UI スレッド内でタイマー駆動し、現在の再生位置を更新。補間済みの値を Telemetry に引き渡します。
-- 送信スレッド: `app/net/udp_sender.py`（想定）などで独立スレッドを生成。`time.perf_counter_ns()` に基づき、指定周期で最新ペイロードを送出します。オーバーラン時はドリフト補正を行い、UI スレッドをブロックしません。
+## データフロー
+1. `MainWindow` が `Timeline` モデルと `TimelinePlot` を接続し、`MouseController` を通じてキーフレーム操作を受け取ります。
+2. 編集操作は Undo/Redo 可能な `QUndoCommand` によって `QUndoStack` に積まれます。
+3. `PlaybackController` が QTimer でプレイヘッドを進め、`playhead_changed` シグナルで UI 描画と Telemetry を更新します。
+4. Telemetry 有効時は `TelemetryBridge` が現在値を `TelemetryAssembler` に渡し、`UdpSenderService` が最新ペイロードを送信します。
 
-## 設定と永続化
-- Qt の QSettings を使用し、`/telemetry/*` や `/playback/loop_enabled` などのキーを保存します。
-- 設定値は起動時に読み込まれ、UI の既定値に反映されます。変更はリアルタイムにテレメトリモジュールへ伝達されます。
-- 保存先は OS 既定のアプリケーション設定ディレクトリ（例: Windows レジストリ、macOS の `~/Library/Preferences`、Linux の `~/.config`）。
+## スレッドとライフサイクル
+- **UI スレッド**: Qt のメインループ。すべてのウィジェットとユーザー操作を処理します。
+- **TelemetryBridge スレッド**: `TelemetryBridge` 内で起動し、送信タイミングのガバナーを担当します。
+- **UDP 送信スレッド**: `UdpSenderService` が保持。最新フレームのみを送信します。
+- `MainWindow.closeEvent` で TelemetryBridge を確実に停止し、テストやアプリ終了時にスレッドが残らないようにしています。
 
-## 補足
-- Telemetry モジュールは再生状態に同期しており、停止時は送信スレッドを停止させてネットワーク負荷を抑えます。
-- CSV エクスポートとテレメトリ送信は独立した経路を持つため、同時に実行しても互いをブロックしません。
-- 今後、新たな出力プロトコルを追加する場合は Telemetry → Network の境界を利用し、`PayloadAssembler` と送信実装を差し替えることで対応しやすくなっています。
+## 永続化と設定
+- QSettings (`TimelineTool` 名義) で Telemetry とループ設定を保存します。
+- プロジェクトファイルは JSON フォーマットで単一トラックのキー列と補間モードを保持します。
+
+## 今後の拡張ポイント
+- 複数トラックやトラック種別の導入は `Timeline`/`Track` モデルと UI (`TimelinePlot`, Inspector) の抽象化が必要です。
+- テスト層は `pytest-qt` による GUI スモークテストを起点に、操作シナリオの自動化へ拡張できます。
+- PyInstaller を用いたスタンドアロン配布をフェーズ 0 で整備し、以降の機能強化と並行して保守します。
