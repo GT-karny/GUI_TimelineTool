@@ -22,13 +22,12 @@
 - ダーク or ライトテーマ（どちらか固定で可）
 
 # Future functions
-- UDP/gRPC配信
+- UDP配信（JSON/Protobuf）
 - Enum/Discreteトラック（色分け・ラベル編集）
-- Bezier/Ease補間
+- Bezier補間（Ease等のカーブ拡張を含む）
 - トラック折りたたみ／並べ替え
 - 再生速度可変、統計メーター
 - 列名・単位カスタム出力
-- gRPC双方向Sync、JSONペイロード
 - カーブテンプレ（台形・ランプなど）
 - NaN/Inf排除、決定論性テスト
 - 密集時ラベル省略・ツールチップ
