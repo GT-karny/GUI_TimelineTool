@@ -1,7 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build specification for the TimelineTool GUI application."""
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 block_cipher = None
 
@@ -16,8 +21,8 @@ hiddenimports = sorted(set(
 ))
 
 analysis = Analysis(
-    ['app/app.py'],
-    pathex=['.'],
+    [str(PROJECT_ROOT / 'app' / 'app.py')],
+    pathex=[str(PROJECT_ROOT)],
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,
