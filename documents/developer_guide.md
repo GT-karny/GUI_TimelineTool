@@ -3,59 +3,53 @@
 ## ディレクトリ構成と責務
 | パス | 役割 |
 | ---- | ---- |
-| `app/app.py` | エントリーポイント。Qt アプリケーションの初期化とメインウィンドウ生成。 |
-| `app/ui/` | Qt Designer 生成コードと UI ウィジェット。ビュー層の責務を担います。 |
-| `app/playback/` | タイムラインデータモデルと再生ループ、補間ロジック。 |
-| `app/telemetry/` | テレメトリ生成・整形 (`assembler` など) と送信制御。 |
-| `app/net/` | UDP 送信などネットワーク周りの実装。 |
-| `app/io/` | CSV エクスポートなど入出力ユーティリティ。 |
-| `app/actions/` | UI コマンドとショートカットのバインド。 |
-| `tools/` | UDP 受信などの補助スクリプト。 |
-| `documents/` | このプロジェクトのドキュメント群。 |
+| `app/app.py` | アプリケーションのエントリーポイント。Qt アプリと `MainWindow` を初期化します。 |
+| `app/ui/` | `MainWindow`、`TimelinePlot`、`KeyInspector`、ツールバーなど UI レイヤを構成するウィジェット群。 |
+| `app/core/` | タイムライン (`Timeline`/`Track`/`Keyframe`) のデータモデルと補間ロジック。単一 Float トラック前提の実装です。 |
+| `app/interaction/` | マウス操作と選択状態 (`MouseController`, `SelectionManager`) のハンドリング。 |
+| `app/actions/` | Undo/Redo に対応した `QUndoCommand` 実装をまとめています。 |
+| `app/playback/` | プレイヘッド制御 (`PlaybackController`) と Telemetry 連携 (`telemetry_bridge.py`)。 |
+| `app/telemetry/` | Telemetry 設定 (`settings.py`) と JSON ペイロード生成 (`assembler.py`)。 |
+| `app/net/` | 非同期 UDP 送信を担う `UdpSenderService`。 |
+| `app/io/` | CSV エクスポートと JSON プロジェクト入出力。 |
+| `app/tests/` | `pytest` ベースのユニットテストと GUI スモークテスト。 |
+| `tools/` | `udp_recv.py` や `run_checks.sh` などの開発支援スクリプト。 |
 
-より詳細なアーキテクチャ図は [architecture.md](architecture.md) を参照してください。
+## セットアップ
+1. 仮想環境を作成して依存パッケージをインストールします。
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Windows は .venv\\Scripts\\activate
+   pip install -r requirements.txt
+   ```
+2. ランタイム依存に加えて、`pytest` / `pytest-qt` / `black` / `isort` / `mypy` など開発用ツールも `requirements.txt` に含まれています。
+
+## コーディング規約と自動チェック
+- フォーマッタは `black` (line-length 100)、インポート整形は `isort` (`profile = "black"`) を使用します。
+- 型チェックには `mypy`（Python 3.10 ターゲット、Qt 系は `ignore_missing_imports`）を用います。
+- ルートに配置した `tools/run_checks.sh` で `black --check` / `isort --check-only` / `mypy app` / `pytest` を一括実行できます。
+  ```bash
+  ./tools/run_checks.sh
+  ```
+- CI へ統合する場合も同スクリプトの呼び出しを推奨します。
 
 ## データフロー概要
-```
-PlaybackController → TelemetryBridge → PayloadAssembler → UdpSender
-```
-1. **PlaybackController**: 再生状態・現在時刻を管理。キーフレームデータを補間して現在値を取得します。
-2. **TelemetryBridge**: 再生イベントを受け取り、再生中に限ってテレメトリ送信スレッドを起動/停止します。
-3. **PayloadAssembler**: 現在値を JSON 構造に整形。`session_id` や `frame_index` を付与します。
-4. **UdpSender**: 指定レートで送信を実施。高精度タイマーを用いてドリフトを抑制します。
+1. `MainWindow` が `Timeline` モデルと `TimelinePlot` を接続し、`MouseController` でキーフレーム操作を受け取ります。
+2. 編集操作は `app/actions/undo_commands.py` の `QUndoCommand` を通じて `QUndoStack` に積まれ、Undo/Redo に対応します。
+3. `PlaybackController` が Qt の `QTimer` で再生ヘッドを進め、描画更新と Telemetry 送信をトリガします。
+4. Telemetry が有効な場合、`TelemetryBridge` が最新スナップショットを `TelemetryAssembler` で JSON 化し、`UdpSenderService` が非同期送信します。
 
-## コーディング規約とツール
-- **スタイル**: `black` (88 列) と `isort` に準拠することを推奨します。
-- **型ヒント**: 主要な関数・クラスには `typing` ベースの型注釈を追加します。
-- **テスト**: `pytest` を使用（`app/tests/` 配下）。必要に応じてモックで GUI 依存を切り離します。
-- **静的解析**: `mypy` を導入済みであれば `mypy app` の実行を推奨します。
-- 変更前に `requirements.txt` を更新する場合は、互換性検証を行い README とドキュメントを合わせて修正してください。
+## テスト
+- ユニットテストは `pytest` を用いて `app/tests/` から実行します。
+- GUI スモークテスト（`test_main_window_smoke.py`）は `pytest-qt` の `qtbot` フィクスチャで `MainWindow` を生成し、主要ウィジェットの存在と基本操作を検証します。
+- 新しい UI を追加する際は同テストを拡張し、ウィジェットの生成に失敗しないことを確認してください。
 
-## ブランチ運用とコミット
-- メインブランチは常にリリース可能な状態を維持してください。
-- 機能追加は `feature/<summary>`、バグ修正は `fix/<issue>` のようなトピックブランチを作成します。
-- コミットメッセージは「領域: 要約」の形式（例: `telemetry: clamp rate upper bound`）で短く具体的に書きます。
-- Pull Request では、概要とテスト結果（実行コマンド）を記載してください。
+## PyInstaller による配布
+- フェーズ 0 で Windows 向けスタンドアロン配布を整備する方針です。PyInstaller ベースでバンドル構成を検証し、最初の実行ファイル生成を優先して実施します。
+- バンドル設定（spec ファイル）は `tools/` 配下に追加し、生成手順を `documents/` に追記する予定です。
+- PyInstaller パイプラインを更新した際は、最低限 GUI 起動と CSV エクスポートが動作することを手動確認してください。
 
-## ローカル検証手順
-1. 単体テスト
-   ```bash
-   pytest
-   ```
-2. GUI 実行確認
-   ```bash
-   python -m app.app
-   ```
-3. UDP 受信テスト
-   ```bash
-   python tools/udp_recv.py
-   ```
-   - 別ウィンドウでアプリを再生し、メッセージが流れることを確認します。
-4. ログの確認
-   - 標準出力またはアプリ内コンソールに INFO ログが出力されます。必要に応じて `logging` レベルを調整してください。
-
-## 将来拡張の方向性
-- テレメトリメッセージの圧縮や TLS 対応などのネットワーク強化
-- キーフレーム編集の一括操作（複数選択コピー、ペースト）
-- スクリプト API の公開による自動化支援
-- 設定プロファイルのエクスポート/インポート機能
+## トラブルシュートのヒント
+- Telemetry 送信が不要なテストケースでは `MainWindow.close()` を呼び、`TelemetryBridge.shutdown()` が確実に実行されるようにします。
+- `pyqtgraph` のシーンを触るテストを追加する場合は、`qtbot.wait()` を挟んでイベントループを回すと安定します。
+- 依存ライブラリの更新時は `requirements.txt` と `pyproject.toml` の設定が整合しているか確認してください。

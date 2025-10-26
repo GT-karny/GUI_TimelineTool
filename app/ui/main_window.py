@@ -1,5 +1,7 @@
 # ui/main_window.py
 from __future__ import annotations
+
+import logging
 from pathlib import Path
 from typing import Set, List, Optional
 from PySide6 import QtWidgets, QtCore
@@ -26,6 +28,9 @@ from ..actions.undo_commands import (
     AddKeyCommand, DeleteKeysCommand, MoveKeyCommand,
     SetKeyTimeCommand, SetKeyValueCommand
 )
+
+logger = logging.getLogger(__name__)
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -115,9 +120,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ついでにUndo/Redoのたびに再描画
         self.undo.indexChanged.connect(self._refresh_view)
-        self.undo.indexChanged.connect(lambda _: print(
-            f"[UNDO DEBUG] index={self.undo.index()} / count={self.undo.count()} / clean={self.undo.isClean()}"
-        ))
+        self.undo.indexChanged.connect(self._log_undo_stack_state)
 
 
         # --- Selection / Mouse 配線 ---
@@ -346,6 +349,14 @@ class MainWindow(QtWidgets.QMainWindow):
             playhead_ms=int(playhead_s * 1000),
             frame_index=frame_index,
             track_snapshots=snapshots,
+        )
+
+    def _log_undo_stack_state(self, _: int) -> None:
+        logger.debug(
+            "Undo stack changed: index=%d count=%d clean=%s",
+            self.undo.index(),
+            self.undo.count(),
+            self.undo.isClean(),
         )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
