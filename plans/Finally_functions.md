@@ -3,7 +3,7 @@
 
 マウスでのキーフレーム操作（追加／ドラッグ移動／削除／複数選択）
 
-補間：Linear / Cubic / Step（将来：Bezier/Ease）
+補間：Linear / Cubic / Step / Bezier（必要に応じて Ease 曲線拡張）
 
 ズーム・パン、再生ヘッド、ループ再生、スナップ（時間・値）
 
@@ -46,8 +46,6 @@ CSVエクスポート（固定周期サンプリング、既定90 Hz／可変）
 ## 6) ライブ配信
 
 UDP：宛先IP/Port/レート設定、Protobuf/JSON形式で送信
-
-gRPC：ストリーミング送信（Push／双方向Sync）
 
 送信メトリクス：実効Hz、seq、遅延目安、ドロップ率
 

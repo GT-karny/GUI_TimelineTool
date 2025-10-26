@@ -1,5 +1,7 @@
 # interaction/mouse_controller.py
 from __future__ import annotations
+
+import logging
 from typing import Optional, Callable
 import numpy as np
 from PySide6 import QtCore, QtWidgets
@@ -9,6 +11,9 @@ import pyqtgraph as pg
 from ..core.timeline import Timeline, Keyframe
 from ..core.interpolation import evaluate
 from .selection import SelectionManager, KeyPoint, KeyPosProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class MouseController(QtCore.QObject):
@@ -200,8 +205,11 @@ class MouseController(QtCore.QObject):
             if self._rc_press_scene is None:
                 return True
             cur = ev.scenePos()
-            if not self._rc_dragging and (cur - self._rc_press_scene).manhattanLength() > self._rc_drag_thresh_px:
-                self._rc_dragging = True
+            if not self._rc_dragging:
+                # Robust Manhattan distance for QPointF (avoid QPointF.manhattanLength)
+                d = abs(cur.x() - self._rc_press_scene.x()) + abs(cur.y() - self._rc_press_scene.y())
+                if d > self._rc_drag_thresh_px:
+                    self._rc_dragging = True
 
             # ピボットを中心にXY独立スケール
             dx_px = cur.x() - (self._rc_last_scene.x() if self._rc_last_scene else cur.x())
@@ -289,8 +297,6 @@ class MouseController(QtCore.QObject):
                         self.timeline.track.keys.remove(key)
                 self.on_changed()
                 return
-            except Exception as e:
-                import traceback
-                print("[RC-DELETE ERROR]", e)
-                traceback.print_exc()
+            except Exception:
+                logger.exception("Failed to delete keyframe from context menu")
                 return

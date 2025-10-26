@@ -68,7 +68,8 @@ class SelectionManager:
         best_d = 1e9
         for kp in self._provider.iter_all_keypoints():
             sp = self._provider.scene_pos_of(kp)
-            d = (sp - scene_pos).manhattanLength()
+            # Robust Manhattan distance for QPointF (avoid QPointF.manhattanLength)
+            d = abs(sp.x() - scene_pos.x()) + abs(sp.y() - scene_pos.y())
             if d < best_d:
                 best_d = d
                 best = kp
