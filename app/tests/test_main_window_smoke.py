@@ -16,7 +16,7 @@ def test_main_window_smoke(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     window.show()
-    qtbot.waitExposed(window)
+    qtbot.waitUntil(window.isVisible)
 
     assert window.plotw is not None
     assert window.inspector is not None
