@@ -28,6 +28,15 @@ GUI Timeline Tool は、単一の Float トラックをキーフレームで編�
    ```
 3. 初回起動時は 0 秒と duration 秒に 2 つのキーフレームを持つ単一トラックが表示されます。ダブルクリックやツールバーからキーを追加して編集を開始してください。
 
+## パッケージング (Windows 向け実行ファイル)
+開発環境で PyInstaller を利用してスタンドアロンの実行ファイルを生成できます。
+
+```bash
+pyinstaller --clean --noconfirm tools/timeline_tool.spec
+```
+
+コマンド完了後、`dist/TimelineTool/TimelineTool.exe` が生成されます。Windows 環境でこのファイルを実行して GUI アプリケーションが起動することを確認してください。
+
 ## 基本操作
 ### 再生・停止・ループ
 - ツールバーの ▶（再生）、⏸（一時停止）、■（停止）で再生状態を制御します。
