@@ -3,6 +3,9 @@ pyqtgraph
 numpy
 scipy
 
+# Packaging
+PyInstaller>=5.13
+
 # Testing
 pytest
 pytest-qt
