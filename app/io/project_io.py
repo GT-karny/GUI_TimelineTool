@@ -1,28 +1,68 @@
 import json
 from pathlib import Path
+from typing import Iterable, List
 
 from ..core.timeline import Timeline, Track, Keyframe, InterpMode
 
 
+def _serialize_track(track: Track) -> dict:
+    return {
+        "id": track.track_id,
+        "name": track.name,
+        "interp": track.interp.value,
+        "keys": [{"t": k.t, "v": k.v} for k in track.keys],
+    }
+
+
 def save_project(path: str | Path, tl: Timeline, sample_rate_hz: float) -> None:
+    tracks_payload = [_serialize_track(track) for track in tl.tracks]
     obj = {
         "duration_s": tl.duration_s,
         "sample_rate_hz": float(sample_rate_hz),
-        "track": {
-            "name": tl.track.name,
-            "interp": tl.track.interp.value,
-            "keys": [{"t": k.t, "v": k.v} for k in tl.track.keys],
-        },
+        "tracks": tracks_payload,
     }
+    if tracks_payload:
+        legacy_track = tracks_payload[0].copy()
+        legacy_track.pop("id", None)
+        obj["track"] = legacy_track
     Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_tracks(data: Iterable[dict]) -> List[Track]:
+    tracks: List[Track] = []
+    for idx, track_obj in enumerate(data):
+        name = track_obj.get("name") or f"Track {idx + 1}"
+        interp_raw = track_obj.get("interp", InterpMode.CUBIC.value)
+        try:
+            interp = InterpMode(interp_raw)
+        except ValueError:
+            interp = InterpMode.CUBIC
+        keys = [Keyframe(**kv) for kv in track_obj.get("keys", [])]
+        if not keys:
+            keys = [Keyframe(0.0, 0.0)]
+        track = Track(
+            name=name,
+            interp=interp,
+            keys=keys,
+            track_id=track_obj.get("id"),
+        )
+        track.clamp_times()
+        tracks.append(track)
+    if not tracks:
+        tracks.append(Track())
+    return tracks
 
 
 def load_project(path: str | Path) -> tuple[Timeline, float]:
     obj = json.loads(Path(path).read_text(encoding="utf-8"))
-    tr = Track(
-        name=obj["track"]["name"],
-        interp=InterpMode(obj["track"]["interp"]),
-        keys=[Keyframe(**kv) for kv in obj["track"]["keys"]],
-    )
     sample_rate = float(obj.get("sample_rate_hz", 90.0))
-    return Timeline(duration_s=float(obj["duration_s"]), track=tr), sample_rate
+
+    tracks_data = obj.get("tracks")
+    if not tracks_data and "track" in obj:
+        single = obj["track"]
+        if isinstance(single, dict):
+            tracks_data = [single]
+
+    tracks = _load_tracks(tracks_data or [])
+    timeline = Timeline(duration_s=float(obj.get("duration_s", 10.0)), tracks=tracks)
+    return timeline, sample_rate
