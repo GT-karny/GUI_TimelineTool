@@ -7,13 +7,30 @@ import time.  To keep the application code importable for unit tests we install
 very small stub modules that mimic the tiny subset of the APIs used in tests.
 
 When the real libraries are available this module keeps out of the way because
-``PySide6`` can be imported successfully and the stubs are never created.
+``PySide6`` can be imported successfully and the stubs are never created. To
+avoid masking configuration errors in production the stubs are only activated
+when the ``TIMELINE_TOOL_USE_QT_STUBS`` environment variable is set to a truthy
+value (``1``, ``true``, ``yes``) or when the interpreter is started through
+``pytest``.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import types
+
+
+def _is_truthy(value: str) -> bool:
+    return value.lower() in {"1", "true", "yes"}
+
+
+def _running_under_pytest() -> bool:
+    argv0 = os.path.basename(sys.argv[0]) if sys.argv else ""
+    return "pytest" in argv0 or "PYTEST_CURRENT_TEST" in os.environ
+
+
+_USE_QT_STUBS = _is_truthy(os.environ.get("TIMELINE_TOOL_USE_QT_STUBS", "")) or _running_under_pytest()
 
 
 def _install_pyside6_stub() -> None:
@@ -323,6 +340,9 @@ try:  # pragma: no cover - executed during import
     import PySide6.QtGui  # type: ignore # noqa: F401
     import PySide6.QtWidgets  # type: ignore # noqa: F401
 except Exception:  # pragma: no cover - executed when Qt missing
+    if not _USE_QT_STUBS:
+        raise
+
     for name in list(sys.modules):
         if name.startswith("PySide6"):
             sys.modules.pop(name)
