@@ -66,16 +66,12 @@ class TimelinePlot(QtWidgets.QWidget):
             return
 
         if self._playback is not None:
-            try:
-                self._playback.playhead_changed.disconnect(self._on_playback_playhead)
-            except TypeError:
-                pass
+            self._playback.remove_playhead_listener(self._on_playback_playhead)
 
         self._playback = playback
 
         if playback is not None:
-            playback.playhead_changed.connect(self._on_playback_playhead)
-            self.set_playhead(playback.playhead)
+            playback.add_playhead_listener(self._on_playback_playhead)
 
     def set_playhead(self, t: float) -> None:
         """プレイヘッド位置を秒で設定。"""

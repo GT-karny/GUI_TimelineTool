@@ -10,8 +10,9 @@ import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode, Track
 from ..core.interpolation import evaluate
-from ..io.csv_exporter import export_csv
 from ..io.project_io import save_project, load_project
+from ..services.export_dialog import export_timeline_csv_via_dialog
+from ..services.telemetry_sender import build_track_snapshots, snapshots_to_payload
 from .track_container import TrackContainer
 from .toolbar import TimelineToolbar
 from .inspector import KeyInspector  # ★ 追加
@@ -287,11 +288,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_view()
 
     def _on_export_csv(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export CSV", "timeline.csv", "CSV Files (*.csv)")
-        if not path:
-            return
-        export_csv(path, self.timeline, self.sample_rate_hz)
-        QtWidgets.QMessageBox.information(self, "Export", f"Exported to:\n{path}")
+        export_timeline_csv_via_dialog(self, self.timeline, self.sample_rate_hz)
 
     def _on_play(self):
         self.playback.play()
@@ -397,9 +394,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._telemetry_frame_index = frame_index + 1
 
     def _send_telemetry_frame(self, playing: bool, playhead_s: float, frame_index: int) -> None:
-        track = self.timeline.track
-        values = evaluate(track, np.array([playhead_s], dtype=float))
-        snapshots = [{"name": track.name, "value": float(values[0])}]
+        snapshots = snapshots_to_payload(
+            build_track_snapshots(self.timeline, playhead_s)
+        )
         self.telemetry_bridge.update_snapshot(
             playing=playing,
             playhead_ms=int(playhead_s * 1000),

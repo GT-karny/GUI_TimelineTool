@@ -6,7 +6,8 @@ from PySide6 import QtWidgets
 
 from ..core.timeline import Timeline, Keyframe
 from ..core.interpolation import evaluate
-from ..io.csv_exporter import export_csv
+from ..io.csv_exporter import build_csv_table, write_csv
+from ..services.export_dialog import export_timeline_csv_via_dialog
 
 
 class TimelineActions:
@@ -67,15 +68,10 @@ class TimelineActions:
         """パス指定でCSV出力。成功/失敗を返す。"""
         if not path:
             return False
-        export_csv(path, self.timeline, float(self._get_rate()))
+        table = build_csv_table(self.timeline, float(self._get_rate()))
+        write_csv(path, table)
         return True
 
     def export_csv_dialog(self, parent: Optional[QtWidgets.QWidget]) -> bool:
         """保存ダイアログを出してCSV出力。"""
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(parent, "Export CSV", "timeline.csv", "CSV Files (*.csv)")
-        if not path:
-            return False
-        ok = self.export_csv(path)
-        if ok:
-            QtWidgets.QMessageBox.information(parent, "Export", f"Exported to:\n{path}")
-        return ok
+        return export_timeline_csv_via_dialog(parent, self.timeline, float(self._get_rate()))

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6 import QtCore
 
@@ -81,6 +81,20 @@ class PlaybackController(QtCore.QObject):
         self.stop()
         self._timeline = timeline
         self.set_playhead(min(self._playhead_s, float(self._timeline.duration_s)))
+
+    def add_playhead_listener(self, slot: Callable[[float, bool], None]) -> None:
+        """Connect a listener to playhead updates and push the current value immediately."""
+
+        self.playhead_changed.connect(slot)
+        slot(self._playhead_s, self._playing)
+
+    def remove_playhead_listener(self, slot: Callable[[float, bool], None]) -> None:
+        """Disconnect a previously registered playhead listener."""
+
+        try:
+            self.playhead_changed.disconnect(slot)
+        except TypeError:
+            pass
 
     def set_playhead(self, value: float) -> None:
         duration = max(0.0, float(self._timeline.duration_s))
