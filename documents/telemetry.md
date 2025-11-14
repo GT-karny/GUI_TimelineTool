@@ -13,7 +13,7 @@
 | `session_id` | string | 送信セッション識別子。未設定時は起動毎に自動生成 |
 | `timestamp_ms` | integer | タイムライン内の現在位置（ミリ秒） |
 | `frame_index` | integer | 再生開始からのフレーム数 (0 起点) |
-| `tracks` | array<object> | 各トラックの値。要素は `{"name": str, "value": number}` |
+| `tracks` | array<object> | 各トラックの値配列。要素は `{"name": str, "values": number[]}` |
 
 ### サンプルペイロード
 ```json
@@ -23,8 +23,8 @@
   "timestamp_ms": 1320,
   "frame_index": 33,
   "tracks": [
-    {"name": "camera.fov", "value": 65.0},
-    {"name": "rig.lift", "value": 1.42}
+    {"name": "camera.fov", "values": [65.0]},
+    {"name": "rig.lift", "values": [1.42, -0.1]}
   ]
 }
 ```
@@ -57,7 +57,7 @@
 4. タイムラインを再生すると、受信側に JSON が 1 行ずつ表示されます。
    例:
    ```text
-   {'version': '0.6.0', 'session_id': 'demo-session', 'timestamp_ms': 1320, 'frame_index': 33, 'tracks': [{'name': 'camera.fov', 'value': 65.0}]}
+    {'version': '0.6.0', 'session_id': 'demo-session', 'timestamp_ms': 1320, 'frame_index': 33, 'tracks': [{'name': 'camera.fov', 'values': [65.0]}]}
    ```
 
 ## 制限事項とベストプラクティス
