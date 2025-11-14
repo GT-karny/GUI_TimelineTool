@@ -1,11 +1,12 @@
+import importlib
 import os
-from typing import Dict, Iterable
-
 from typing import Dict, Iterable
 
 os.environ.setdefault("TIMELINE_TOOL_USE_QT_STUBS", "1")
 
 import sitecustomize  # noqa: F401  # ensure Qt stubs are installed before imports
+
+importlib.reload(sitecustomize)
 
 import pytest
 from PySide6 import QtCore, QtWidgets
