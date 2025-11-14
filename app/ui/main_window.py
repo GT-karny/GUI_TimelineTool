@@ -39,6 +39,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._base_title = self.windowTitle()
         self.resize(1400, 780)
 
+        self._init_model_state()
+        self._init_toolbar()
+        self._init_central_widgets()
+        self._init_undo_stack()
+        self._wire_signals()
+        self._initialize_view_state()
+
+    def _init_model_state(self) -> None:
         # --- Model ---
         self.timeline = Timeline()
         self.sample_rate_hz: float = 90.0
@@ -47,19 +55,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telemetry_bridge = TelemetryBridge(self._app_settings)
         self._telemetry_frame_index = 0
         self._telemetry_ui_updating = False
+        self.playback = PlaybackController(self.timeline, self._app_settings)
 
+    def _init_toolbar(self) -> None:
         # --- Toolbar ---
         self.toolbar = TimelineToolbar(self.timeline.duration_s, self.sample_rate_hz)
         self.addToolBar(self.toolbar)
 
+    def _init_central_widgets(self) -> None:
         # --- Plot (center) ---
         self.plotw = TimelinePlot(self)
-
-        # --- Playback controller ---
-        self.playback = PlaybackController(self.timeline, self._app_settings)
-        self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
-        self.playback.playing_changed.connect(self._on_playback_state_changed)
-        self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
         # 中央コンテナ
         central = QtWidgets.QWidget(self)
@@ -106,6 +111,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # モデル→ビュー注入
         self.plotw.set_timeline(self.timeline)
 
+    def _init_undo_stack(self) -> None:
         self.undo = QUndoStack(self)
         # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
         self.act_undo = self.undo.createUndoAction(self, "Undo")
@@ -122,6 +128,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.indexChanged.connect(self._refresh_view)
         self.undo.indexChanged.connect(self._log_undo_stack_state)
 
+    def _wire_signals(self) -> None:
+        # --- Playback controller ---
+        self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
+        self.playback.playing_changed.connect(self._on_playback_state_changed)
+        self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
         # --- Selection / Mouse 配線 ---
         self._pos_provider = SingleTrackPosProvider(self.plotw.plot, self.timeline.track, track_id=0)
@@ -141,15 +152,9 @@ class MainWindow(QtWidgets.QMainWindow):
             delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
         )
 
-
         # Inspector signals -> apply edits
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
-
-        # --- 初期描画・レンジ ---
-        self._refresh_view()
-        self.plotw.fit_x()
-        self.plotw.fit_y(0.15)
 
         # --- Wire toolbar signals ---
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
@@ -166,7 +171,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
-
+    def _initialize_view_state(self) -> None:
+        # --- 初期描画・レンジ ---
+        self._refresh_view()
+        self.plotw.fit_x()
+        self.plotw.fit_y(0.15)
 
         self._update_window_title()
         self._connect_telemetry_ui()
