@@ -12,7 +12,7 @@ from ..core.timeline import Timeline, Keyframe, InterpMode
 from ..core.interpolation import evaluate
 from ..io.csv_exporter import export_csv
 from ..io.project_io import save_project, load_project
-from .timeline_plot import TimelinePlot
+from .track_container import TrackContainer
 from .toolbar import TimelineToolbar
 from .inspector import KeyInspector  # ★ 追加
 from .telemetry_panel import TelemetryPanel
@@ -63,9 +63,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addToolBar(self.toolbar)
 
     def _init_central_widgets(self) -> None:
-        # --- Plot (center) ---
-        self.plotw = TimelinePlot(self)
-
         # 中央コンテナ
         central = QtWidgets.QWidget(self)
         vbox = QtWidgets.QVBoxLayout(central)
@@ -79,8 +76,10 @@ class MainWindow(QtWidgets.QMainWindow):
         vbox.addWidget(self.telemetry_panel)
         vbox.addWidget(self.inspector)
 
-        # プロットを下に
-        vbox.addWidget(self.plotw)
+        # トラックコンテナ
+        self.track_container = TrackContainer(self.playback, parent=self)
+        self.track_container.rows_changed.connect(self._on_track_rows_changed)
+        vbox.addWidget(self.track_container)
 
         self.setCentralWidget(central)
         self.setStatusBar(QtWidgets.QStatusBar())
@@ -88,7 +87,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menu()
 
         # モデル→ビュー注入
-        self.plotw.set_timeline(self.timeline)
+        self.track_container.set_timeline(self.timeline)
+        self._on_track_rows_changed()
 
     def _init_undo_stack(self) -> None:
         self.undo = QUndoStack(self)
@@ -131,6 +131,10 @@ class MainWindow(QtWidgets.QMainWindow):
             delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
         )
 
+        # --- Track コンテナ操作 ---
+        self.track_container.request_add_track.connect(self._on_request_add_track)
+        self.track_container.request_remove_track.connect(self._on_request_remove_track)
+
         # Inspector signals -> apply edits
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
@@ -151,6 +155,40 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
         self.telemetry_panel.settings_changed.connect(self._on_telemetry_settings_changed)
+
+    def _on_track_rows_changed(self) -> None:
+        primary = self.track_container.primary_row
+        if primary is None:
+            return
+
+        plot = primary.timeline_plot
+        replaced = getattr(self, "plotw", None) is not plot
+        self.plotw = plot
+        self.plotw.set_track(self.timeline.track)
+        self.plotw.set_duration(self.timeline.duration_s)
+        self.plotw.set_playback_controller(self.playback)
+
+        if hasattr(self, "_pos_provider"):
+            self._pos_provider.track = self.timeline.track
+            self._pos_provider.vb = self.plotw.plot.plotItem.vb
+        if hasattr(self, "mouse") and replaced:
+            try:
+                self.mouse.plot.scene().removeEventFilter(self.mouse)
+            except Exception:
+                pass
+            self.mouse.plot = self.plotw.plot
+            self.mouse.plot.scene().installEventFilter(self.mouse)
+
+    def _on_request_add_track(self) -> None:
+        self.timeline.add_track()
+        self.track_container.set_timeline(self.timeline)
+        self._refresh_view()
+
+    def _on_request_remove_track(self, track_id: str) -> None:
+        if not self.timeline.remove_track(track_id):
+            return
+        self.track_container.set_timeline(self.timeline)
+        self._refresh_view()
 
     def _initialize_view_state(self) -> None:
         # --- 初期描画・レンジ ---
@@ -179,6 +217,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_duration_changed(self, seconds: float):
         self.timeline.set_duration(float(seconds))
+        self.track_container.update_duration(self.timeline.duration_s)
         self.plotw.fit_x()
         self.playback.clamp_to_duration()
         self._refresh_view()
@@ -271,7 +310,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
         ks = self.timeline.track.sorted()
-        self.plotw.update_curve()
+        self.track_container.refresh_all_rows()
 
         selected_key_ids: Set[int] = {kid for (tid, kid) in self.sel.selected if tid == 0}
         self.plotw.update_points(ks, selected_key_ids)
@@ -360,7 +399,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if sample_rate is not None:
             self.sample_rate_hz = float(sample_rate)
 
-        self.plotw.set_timeline(self.timeline)
+        self.track_container.set_timeline(self.timeline)
+        self.track_container.update_duration(self.timeline.duration_s)
+        self._on_track_rows_changed()
         self.playback.set_timeline(self.timeline)
         self._pos_provider.track = self.timeline.track
         self.mouse.timeline = self.timeline
