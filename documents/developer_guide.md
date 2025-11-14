@@ -5,7 +5,7 @@
 | ---- | ---- |
 | `app/app.py` | アプリケーションのエントリーポイント。Qt アプリと `MainWindow` を初期化します。 |
 | `app/ui/` | `MainWindow`、`TimelinePlot`、`KeyInspector`、ツールバーなど UI レイヤを構成するウィジェット群。 |
-| `app/core/` | タイムライン (`Timeline`/`Track`/`Keyframe`) のデータモデルと補間ロジック。単一 Float トラック前提の実装です。 |
+| `app/core/` | タイムライン (`Timeline`/`Track`/`Keyframe`) のデータモデルと補間ロジック。複数 Float トラックを前提に Undo/Redo と CSV を連携します。 |
 | `app/interaction/` | マウス操作と選択状態 (`MouseController`, `SelectionManager`) のハンドリング。 |
 | `app/actions/` | Undo/Redo に対応した `QUndoCommand` 実装をまとめています。 |
 | `app/playback/` | プレイヘッド制御 (`PlaybackController`) と Telemetry 連携 (`telemetry_bridge.py`)。 |

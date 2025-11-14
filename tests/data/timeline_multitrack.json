@@ -1,0 +1,44 @@
+{
+  "duration_s": 3.5,
+  "sample_rate_hz": 90.0,
+  "tracks": [
+    {
+      "id": "track_cam_fov",
+      "name": "Camera.FOV",
+      "interp": "cubic",
+      "keys": [
+        {"t": 0.0, "v": 10.0},
+        {"t": 1.5, "v": 20.0},
+        {"t": 3.0, "v": 30.0}
+      ]
+    },
+    {
+      "id": "track_cam_fov_alt",
+      "name": "Camera FOV",
+      "interp": "linear",
+      "keys": [
+        {"t": 0.0, "v": 1.0},
+        {"t": 1.0, "v": 2.0},
+        {"t": 2.0, "v": 3.0}
+      ]
+    },
+    {
+      "id": "track_aux",
+      "name": "   ",
+      "interp": "step",
+      "keys": [
+        {"t": 0.0, "v": 5.0},
+        {"t": 2.5, "v": 7.5}
+      ]
+    }
+  ],
+  "track": {
+    "name": "Camera.FOV",
+    "interp": "cubic",
+    "keys": [
+      {"t": 0.0, "v": 10.0},
+      {"t": 1.5, "v": 20.0},
+      {"t": 3.0, "v": 30.0}
+    ]
+  }
+}
