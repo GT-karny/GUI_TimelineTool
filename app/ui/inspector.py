@@ -1,5 +1,7 @@
 # ui/inspector.py
 from __future__ import annotations
+from typing import Sequence
+
 from PySide6 import QtWidgets, QtCore
 
 
@@ -18,6 +20,10 @@ class KeyInspector(QtWidgets.QWidget):
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(8, 4, 8, 4)
         lay.setSpacing(8)
+
+        # Track
+        self.lbl_track = QtWidgets.QLabel("Track")
+        self.track_value = QtWidgets.QLabel("—")
 
         # Time
         self.lbl_time = QtWidgets.QLabel("Time")
@@ -48,6 +54,9 @@ class KeyInspector(QtWidgets.QWidget):
         self.value_stack.addWidget(self.value_placeholder)# 1
 
         # 並べる（左揃え）
+        lay.addWidget(self.lbl_track)
+        lay.addWidget(self.track_value)
+        lay.addSpacing(12)
         lay.addWidget(self.lbl_time)
         lay.addWidget(self.time_stack)
         lay.addSpacing(12)
@@ -67,23 +76,25 @@ class KeyInspector(QtWidgets.QWidget):
 
         # スピンボックスとプレースホルダの高さを揃える
         h = 24  # お好みで
-        for w in (self.time_spin, self.value_spin, self.time_placeholder, self.value_placeholder):
+        for w in (self.track_value, self.time_spin, self.value_spin, self.time_placeholder, self.value_placeholder):
             w.setFixedHeight(h)
 
 
     # ---- 外部からの反映 ----
-    def set_single_values(self, t: float, v: float):
+    def set_single_values(self, track_name: str, t: float, v: float):
         self._updating = True
         try:
+            self._set_track_label([track_name])
             self.time_spin.setValue(float(max(0.0, t)))
             self.value_spin.setValue(float(v))
             self.set_selection_state(True)
         finally:
             self._updating = False
 
-    def set_no_or_multi(self):
+    def set_no_or_multi(self, track_names: Sequence[str] | None = None):
         self._updating = True
         try:
+            self._set_track_label(list(track_names or []))
             self.set_selection_state(False)
         finally:
             self._updating = False
@@ -95,6 +106,22 @@ class KeyInspector(QtWidgets.QWidget):
         self.value_spin.setEnabled(has_single)
 
     # ---- 内部 ----
+    def _set_track_label(self, names: Sequence[str]) -> None:
+        if not names:
+            text = "—"
+        else:
+            seen = set()
+            ordered = []
+            for name in names:
+                if name not in seen:
+                    ordered.append(name)
+                    seen.add(name)
+            if len(ordered) == 1:
+                text = ordered[0]
+            else:
+                text = f"Multiple ({len(ordered)})"
+        self.track_value.setText(text)
+
     def _emit_time(self, val: float):
         if not self._updating:
             self.sig_time_edited.emit(float(val))
