@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Set, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 from PySide6 import QtWidgets, QtCore
-from PySide6.QtGui import QKeySequence, QUndoStack
+from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
-from ..core.timeline import Timeline, Keyframe, InterpMode
+from ..core.timeline import Timeline, Keyframe, InterpMode, Track
 from ..core.interpolation import evaluate
 from ..io.csv_exporter import export_csv
 from ..io.project_io import save_project, load_project
@@ -17,7 +17,7 @@ from .toolbar import TimelineToolbar
 from .inspector import KeyInspector  # ★ 追加
 from .telemetry_panel import TelemetryPanel
 
-from ..interaction.selection import SelectionManager
+from ..interaction.selection import SelectionManager, SelectedKey
 from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
 from ..playback.controller import PlaybackController
@@ -26,8 +26,13 @@ from ..telemetry.settings import TelemetrySettings
 
 
 from ..actions.undo_commands import (
-    AddKeyCommand, DeleteKeysCommand, MoveKeyCommand,
-    SetKeyTimeCommand, SetKeyValueCommand
+    AddKeyCommand,
+    AddTrackCommand,
+    DeleteKeysCommand,
+    MoveKeyCommand,
+    RemoveTrackCommand,
+    SetKeyTimeCommand,
+    SetKeyValueCommand,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,7 +119,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
         # --- Selection / Mouse 配線 ---
-        self._pos_provider = SingleTrackPosProvider(self.plotw.plot, self.timeline.track, track_id=0)
+        self._pos_provider = SingleTrackPosProvider(
+            self.plotw.plot,
+            self.timeline.track,
+            track_id=self.timeline.track.track_id,
+        )
         self.sel = SelectionManager(self.plotw.plot.scene(), self._pos_provider)
         self.mouse = MouseController(
             plot_widget=self.plotw.plot,
@@ -124,11 +133,15 @@ class MainWindow(QtWidgets.QMainWindow):
             on_changed=self._refresh_view,
             set_playhead=self.playback.set_playhead,
             commit_drag=lambda key, before, after: self.undo.push(
-                MoveKeyCommand(self.timeline, key, before, after)
+                MoveKeyCommand(self.timeline, self._pos_provider.track_id, key, before, after)
             ),
             # ▼ 追加：右クリック/ダブルクリックの Add/Delete を Undo に積む
-            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(AddKeyCommand(self.timeline, t, v)),
-            delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
+            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(
+                AddKeyCommand(self.timeline, self._pos_provider.track_id, t, v)
+            ),
+            delete_key_cb=lambda key: self.undo.push(
+                DeleteKeysCommand(self.timeline, self._pos_provider.track_id, [key])
+            ),
         )
 
         # --- Track コンテナ操作 ---
@@ -169,7 +182,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.set_playback_controller(self.playback)
 
         if hasattr(self, "_pos_provider"):
-            self._pos_provider.track = self.timeline.track
+            self._pos_provider.track = primary.track
+            self._pos_provider.track_id = primary.track.track_id
             self._pos_provider.vb = self.plotw.plot.plotItem.vb
         if hasattr(self, "mouse") and replaced:
             try:
@@ -179,15 +193,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mouse.plot = self.plotw.plot
             self.mouse.plot.scene().installEventFilter(self.mouse)
 
+        if hasattr(self, "sel"):
+            self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
+
     def _on_request_add_track(self) -> None:
-        self.timeline.add_track()
-        self.track_container.set_timeline(self.timeline)
+        cmd = AddTrackCommand(self.timeline)
+        self.undo.push(cmd)
         self._refresh_view()
 
     def _on_request_remove_track(self, track_id: str) -> None:
-        if not self.timeline.remove_track(track_id):
-            return
-        self.track_container.set_timeline(self.timeline)
+        cmd = RemoveTrackCommand(self.timeline, track_id)
+        self.undo.push(cmd)
         self._refresh_view()
 
     def _initialize_view_state(self) -> None:
@@ -234,23 +250,32 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
         # 仕様：補間値を初期値に
-        v = float(evaluate(self.timeline.track, np.array([t]))[0])
-        cmd = AddKeyCommand(self.timeline, t, v)
+        track = self.timeline.track
+        track_id = track.track_id
+        v = float(evaluate(track, np.array([t]))[0])
+        cmd = AddKeyCommand(self.timeline, track_id, t, v)
         self.undo.push(cmd)
         # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
         kf = cmd.k
         if kf is not None:
-            self.sel.set_single(0, id(kf))
+            self.sel.set_single(track_id, id(kf))
         self._refresh_view()
 
     def _on_delete_selected(self):
-        key_ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        if not key_ids:
+        grouped = self._selected_keys_by_track()
+        if not grouped:
             return
-        targets = [k for k in self.timeline.track.keys if id(k) in key_ids]
-        if not targets:
+
+        root = QUndoCommand("Delete Selected Keys")
+        for track_id, keys in grouped.items():
+            if not keys:
+                continue
+            DeleteKeysCommand(self.timeline, track_id, keys, parent=root)
+
+        if root.childCount() == 0:
             return
-        self.undo.push(DeleteKeysCommand(self.timeline, targets))
+
+        self.undo.push(root)
         self.sel.clear()
         self._refresh_view()
 
@@ -276,21 +301,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- Inspector handlers --------------------
     def _on_inspector_time(self, t_new: float):
-        keys = self._selected_keys()
-        if len(keys) != 1:
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
             return
-        k = keys[0]
+        track, k = pairs[0]
         t_new = float(max(0.0, t_new))
         if abs(k.t - t_new) < 1e-12:
             return
-        self.undo.push(SetKeyTimeCommand(self.timeline, k, old_t=k.t, new_t=t_new))
+        self.undo.push(SetKeyTimeCommand(self.timeline, track.track_id, k, old_t=k.t, new_t=t_new))
         self._refresh_view()
 
     def _on_inspector_value(self, v_new: float):
-        keys = self._selected_keys()
-        if len(keys) != 1:
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
             return
-        k = keys[0]
+        _track, k = pairs[0]
         v_new = float(v_new)
         if abs(k.v - v_new) < 1e-12:
             return
@@ -309,24 +334,54 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
-        ks = self.timeline.track.sorted()
-        self.track_container.refresh_all_rows()
+        self.track_container.set_timeline(self.timeline)
 
-        selected_key_ids: Set[int] = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        self.plotw.update_points(ks, selected_key_ids)
+        resolved = self._resolved_selection()
+        valid_selected = {SelectedKey(track.track_id, id(key)) for track, key in resolved}
+        if valid_selected != self.sel.selected:
+            self.sel.selected = valid_selected
+            resolved = self._resolved_selection()
 
-        # --- inspector sync ---
-        selected_keys = [k for k in ks if id(k) in selected_key_ids]
-        if len(selected_keys) == 1:
-            k = selected_keys[0]
-            self.inspector.set_single_values(k.t, k.v)
+        selection_map: Dict[str, Set[int]] = {}
+        for track, key in resolved:
+            selection_map.setdefault(track.track_id, set()).add(id(key))
+
+        for row in self.track_container.rows:
+            track = row.track
+            ids = selection_map.get(track.track_id, set())
+            row.timeline_plot.update_points(track.sorted(), ids)
+
+        if len(resolved) == 1:
+            track, key = resolved[0]
+            self.inspector.set_single_values(track.name, key.t, key.v)
         else:
-            self.inspector.set_no_or_multi()
+            names = [track.name for track, _ in resolved]
+            self.inspector.set_no_or_multi(names)
 
     # -------------------- Helpers --------------------
-    def _selected_keys(self) -> List[Keyframe]:
-        ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        return [k for k in self.timeline.track.sorted() if id(k) in ids]
+    def _resolved_selection(self) -> List[Tuple[Track, Keyframe]]:
+        track_map = {track.track_id: track for track in self.timeline.iter_tracks()}
+        resolved: List[Tuple[Track, Keyframe]] = []
+        invalid: Set[SelectedKey] = set()
+        for sel in set(self.sel.selected):
+            track = track_map.get(sel.track_id)
+            if track is None:
+                invalid.add(sel)
+                continue
+            key = next((k for k in track.keys if id(k) == sel.key_id), None)
+            if key is None:
+                invalid.add(sel)
+                continue
+            resolved.append((track, key))
+        if invalid:
+            self.sel.selected -= invalid
+        return resolved
+
+    def _selected_keys_by_track(self) -> Dict[str, List[Keyframe]]:
+        grouped: Dict[str, List[Keyframe]] = {}
+        for track, key in self._resolved_selection():
+            grouped.setdefault(track.track_id, []).append(key)
+        return grouped
 
     def _on_telemetry_settings_changed(self, settings: TelemetrySettings) -> None:
         self.telemetry_bridge.apply_settings(settings)
