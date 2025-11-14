@@ -20,7 +20,7 @@ def test_main_window_smoke(qtbot):
 
     assert window.plotw is not None
     assert window.inspector is not None
-    assert window.telemetry_group.isVisible()
+    assert window.telemetry_panel.isVisible()
 
     qtbot.mouseClick(window.toolbar.btn_play, QtCore.Qt.LeftButton)
     qtbot.wait(50)

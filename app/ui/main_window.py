@@ -15,6 +15,7 @@ from ..io.project_io import save_project, load_project
 from .timeline_plot import TimelinePlot
 from .toolbar import TimelineToolbar
 from .inspector import KeyInspector  # ★ 追加
+from .telemetry_panel import TelemetryPanel
 
 from ..interaction.selection import SelectionManager
 from ..interaction.pos_provider import SingleTrackPosProvider
@@ -54,7 +55,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._app_settings = QtCore.QSettings("TimelineTool", "TimelineTool")
         self.telemetry_bridge = TelemetryBridge(self._app_settings)
         self._telemetry_frame_index = 0
-        self._telemetry_ui_updating = False
         self.playback = PlaybackController(self.timeline, self._app_settings)
 
     def _init_toolbar(self) -> None:
@@ -74,30 +74,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ★ インスペクタをツールバー下に配置
         self.inspector = KeyInspector()
-        self.telemetry_group = QtWidgets.QGroupBox("Telemetry")
-        telemetry_form = QtWidgets.QFormLayout(self.telemetry_group)
-        telemetry_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.telemetry_panel = TelemetryPanel()
 
-        self.telemetry_enabled = QtWidgets.QCheckBox("Enable UDP telemetry")
-        telemetry_form.addRow(self.telemetry_enabled)
-
-        self.telemetry_ip = QtWidgets.QLineEdit()
-        self.telemetry_ip.setPlaceholderText("127.0.0.1")
-        telemetry_form.addRow("IP", self.telemetry_ip)
-
-        self.telemetry_port = QtWidgets.QSpinBox()
-        self.telemetry_port.setRange(1, 65535)
-        telemetry_form.addRow("Port", self.telemetry_port)
-
-        self.telemetry_rate = QtWidgets.QSpinBox()
-        self.telemetry_rate.setRange(1, 240)
-        telemetry_form.addRow("Rate (Hz)", self.telemetry_rate)
-
-        self.telemetry_session = QtWidgets.QLineEdit()
-        self.telemetry_session.setPlaceholderText("Leave blank for auto")
-        telemetry_form.addRow("Session ID", self.telemetry_session)
-
-        vbox.addWidget(self.telemetry_group)
+        vbox.addWidget(self.telemetry_panel)
         vbox.addWidget(self.inspector)
 
         # プロットを下に
@@ -171,6 +150,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
+        self.telemetry_panel.settings_changed.connect(self._on_telemetry_settings_changed)
+
     def _initialize_view_state(self) -> None:
         # --- 初期描画・レンジ ---
         self._refresh_view()
@@ -178,8 +159,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.fit_y(0.15)
 
         self._update_window_title()
-        self._connect_telemetry_ui()
-        self._sync_telemetry_ui()
+        self.telemetry_panel.set_settings(
+            self.telemetry_bridge.settings,
+            session_placeholder=self.telemetry_bridge.assembler.session_id,
+        )
 
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
@@ -306,42 +289,12 @@ class MainWindow(QtWidgets.QMainWindow):
         ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
         return [k for k in self.timeline.track.sorted() if id(k) in ids]
 
-    def _connect_telemetry_ui(self) -> None:
-        self.telemetry_enabled.toggled.connect(self._on_telemetry_setting_changed)
-        self.telemetry_ip.editingFinished.connect(self._on_telemetry_setting_changed)
-        self.telemetry_port.valueChanged.connect(self._on_telemetry_setting_changed)
-        self.telemetry_rate.valueChanged.connect(self._on_telemetry_setting_changed)
-        self.telemetry_session.editingFinished.connect(self._on_telemetry_setting_changed)
-
-    def _sync_telemetry_ui(self) -> None:
-        settings = self.telemetry_bridge.settings
-        self._telemetry_ui_updating = True
-        try:
-            self.telemetry_enabled.setChecked(settings.enabled)
-            self.telemetry_ip.setText(settings.ip)
-            self.telemetry_port.setValue(int(settings.port))
-            self.telemetry_rate.setValue(int(settings.rate_hz))
-            session_text = settings.session_id or self.telemetry_bridge.assembler.session_id
-            self.telemetry_session.setText(session_text)
-        finally:
-            self._telemetry_ui_updating = False
-
-    def _current_telemetry_settings(self) -> TelemetrySettings:
-        session_text = self.telemetry_session.text().strip()
-        return TelemetrySettings(
-            enabled=self.telemetry_enabled.isChecked(),
-            ip=self.telemetry_ip.text().strip() or "127.0.0.1",
-            port=int(self.telemetry_port.value()),
-            rate_hz=int(self.telemetry_rate.value()),
-            session_id=session_text or None,
-        )
-
-    def _on_telemetry_setting_changed(self) -> None:
-        if self._telemetry_ui_updating:
-            return
-        settings = self._current_telemetry_settings()
+    def _on_telemetry_settings_changed(self, settings: TelemetrySettings) -> None:
         self.telemetry_bridge.apply_settings(settings)
-        self._sync_telemetry_ui()
+        self.telemetry_panel.set_settings(
+            self.telemetry_bridge.settings,
+            session_placeholder=self.telemetry_bridge.assembler.session_id,
+        )
 
     def _publish_telemetry_snapshot(self, playhead_s: float, playing: bool, *, advance_frame: bool) -> None:
         frame_index = self._telemetry_frame_index
