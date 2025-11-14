@@ -1,5 +1,6 @@
 import time
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Dict
 
 import pytest
 
@@ -54,3 +55,30 @@ class _QtBot:
 @pytest.fixture
 def qtbot() -> _QtBot:
     return _QtBot()
+
+
+# ---- project data fixtures ----
+
+from app.io.project_io import load_project
+
+
+@pytest.fixture(scope="session")
+def _project_data_paths() -> Dict[str, Path]:
+    data_dir = Path(__file__).parent / "tests" / "data"
+    return {
+        "multitrack": data_dir / "timeline_multitrack.json",
+        "legacy_single": data_dir / "timeline_legacy_single_track.json",
+    }
+
+
+@pytest.fixture(params=("multitrack", "legacy_single"))
+def loaded_project(request, _project_data_paths) -> tuple:
+    path = _project_data_paths[request.param]
+    timeline, sample_rate = load_project(path)
+    return timeline, sample_rate, request.param
+
+
+@pytest.fixture
+def multitrack_project(_project_data_paths) -> tuple:
+    timeline, sample_rate = load_project(_project_data_paths["multitrack"])
+    return timeline, sample_rate

@@ -1,13 +1,13 @@
 # アーキテクチャ概要
 
 ## スコープと現状
-GUI Timeline Tool は単一 Float トラックを編集して再生・エクスポートするデスクトップアプリケーションです。PySide6 と pyqtgraph を用いて UI を構築しており、トラックは `app/core` に定義されたシンプルなデータモデル (`Timeline` → `Track` → `Keyframe`) で管理されます。
+GUI Timeline Tool は複数の Float トラックを編集して再生・エクスポートするデスクトップアプリケーションです。PySide6 と pyqtgraph を用いて UI を構築しており、トラックは `app/core` に定義されたデータモデル (`Timeline` → `Track` → `Keyframe`) で管理されます。
 
 ## 主なモジュールと責務
 | モジュール | 役割 |
 | ---------- | ---- |
 | `app/ui` | `MainWindow`、タイムライン描画 (`TimelinePlot`)、Inspector、ツールバーなどのウィジェットを提供。 |
-| `app/core` | タイムライン・トラック・キーフレームのデータモデルと補間 (`core/interpolation.py`) を実装。 |
+| `app/core` | タイムライン・複数トラック・キーフレームのデータモデルと補間 (`core/interpolation.py`) を実装。 |
 | `app/interaction` | マウス操作と選択状態 (`MouseController`, `SelectionManager`) を管理。 |
 | `app/actions` | Undo/Redo に利用する `QUndoCommand` 実装をまとめる。 |
 | `app/playback` | 再生制御 (`PlaybackController`) と Telemetry 連携 (`telemetry_bridge.py`) を担当。 |
@@ -30,9 +30,9 @@ GUI Timeline Tool は単一 Float トラックを編集して再生・エクス�
 
 ## 永続化と設定
 - QSettings (`TimelineTool` 名義) で Telemetry とループ設定を保存します。
-- プロジェクトファイルは JSON フォーマットで単一トラックのキー列と補間モードを保持します。
+- プロジェクトファイルは JSON フォーマットで複数トラックのキー列と補間モードを保持し、最初のトラックはレガシー互換用フィールドにも複写されます。
 
 ## 今後の拡張ポイント
-- 複数トラックやトラック種別の導入は `Timeline`/`Track` モデルと UI (`TimelinePlot`, Inspector) の抽象化が必要です。
+- トラック種別の拡張やモジュレーションなど高次機能は `Timeline`/`Track` モデルと UI (`TimelinePlot`, Inspector) のさらなる抽象化が必要です。
 - テスト層は `pytest-qt` による GUI スモークテストを起点に、操作シナリオの自動化へ拡張できます。
 - PyInstaller を用いたスタンドアロン配布をフェーズ 0 で整備し、以降の機能強化と並行して保守します。

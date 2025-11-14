@@ -1,0 +1,13 @@
+{
+  "duration_s": 4.0,
+  "sample_rate_hz": 120.0,
+  "track": {
+    "name": "Legacy Float",
+    "interp": "linear",
+    "keys": [
+      {"t": 0.0, "v": 0.0},
+      {"t": 2.0, "v": 10.0},
+      {"t": 3.5, "v": 5.0}
+    ]
+  }
+}
