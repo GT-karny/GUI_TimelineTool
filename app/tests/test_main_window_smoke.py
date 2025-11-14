@@ -7,6 +7,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PySide6 = pytest.importorskip("PySide6", exc_type=ImportError)
+pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 from PySide6 import QtCore
 
 MainWindow = pytest.importorskip("app.ui.main_window", exc_type=ImportError).MainWindow
