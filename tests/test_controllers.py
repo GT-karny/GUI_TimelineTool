@@ -45,6 +45,7 @@ def _cleanup_qt_stubs():
 
 from app.core.timeline import Timeline
 from app.ui.controllers import ProjectController, TelemetryController
+from app.ui.main_window import MainWindow
 
 
 class WindowStub:
@@ -106,29 +107,41 @@ def test_project_controller_apply_project_updates_window_state():
     new_timeline = Timeline(duration_s=20.0)
     path = Path("project.json")
 
+    window.apply_project_state = MagicMock()
+
     controller.apply_project(new_timeline, sample_rate=120.0, path=path)
 
+    window.apply_project_state.assert_called_once_with(new_timeline, sample_rate=120.0)
+    assert controller.current_project_path == path
+    window.setWindowTitle.assert_called_with(f"{window._base_title} - {path.name}")
+
+
+def test_main_window_apply_project_state_refreshes_services():
+    window = WindowStub()
+    new_timeline = Timeline(duration_s=12.0)
+    new_timeline.track.name = "Track"
+
+    MainWindow.apply_project_state(window, new_timeline, sample_rate=144.0)
+
     assert window.timeline is new_timeline
-    assert window.sample_rate_hz == 120.0
-    assert window._key_edit.timeline is new_timeline
+    assert window.sample_rate_hz == 144.0
     window.track_container.set_timeline.assert_called_with(new_timeline)
     window.track_container.update_duration.assert_called_with(new_timeline.duration_s)
     window._on_track_rows_changed.assert_called_once()
     window.playback.set_timeline.assert_called_with(new_timeline)
     window._pos_provider.set_binding.assert_called_once()
+    assert window._key_edit.timeline is new_timeline
     assert window.mouse.timeline is new_timeline
     window.sel.clear.assert_called_once()
     window.undo.clear.assert_called_once()
     window.undo.setClean.assert_called_once()
     window.toolbar.set_duration.assert_called_with(new_timeline.duration_s)
     window.toolbar.set_interp.assert_called_with(new_timeline.track.interp.value)
-    window.toolbar.set_rate.assert_called_with(120.0)
+    window.toolbar.set_rate.assert_called_with(144.0)
     window.playback.set_playhead.assert_called_with(0.0)
     window.plotw.fit_x.assert_called_once()
     window.plotw.fit_y.assert_called_once_with(0.15)
     window._refresh_view.assert_called_once()
-    assert controller.current_project_path == path
-    window.setWindowTitle.assert_called_with(f"{window._base_title} - {path.name}")
 
 
 def test_telemetry_controller_publishes_snapshots_and_tracks_frames():

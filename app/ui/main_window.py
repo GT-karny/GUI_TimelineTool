@@ -59,6 +59,58 @@ class MainWindow(QtWidgets.QMainWindow):
         self._wire_signals()
         self._initialize_view_state()
 
+    def apply_project_state(
+        self,
+        timeline: Timeline,
+        *,
+        sample_rate: Optional[float] = None,
+    ) -> None:
+        """Apply a timeline and related state to the window.
+
+        The method centralizes project-loading behaviour so selection and mouse
+        services, toolbar state, and undo stack are refreshed together.
+        """
+
+        self.timeline = timeline
+        if sample_rate is not None:
+            self.sample_rate_hz = float(sample_rate)
+
+        self.track_container.set_timeline(self.timeline)
+        self.track_container.update_duration(self.timeline.duration_s)
+        self._on_track_rows_changed()
+
+        self.playback.set_timeline(self.timeline)
+
+        if hasattr(self, "_pos_provider"):
+            active_row = self.track_container.active_row
+            if active_row is not None:
+                self._pos_provider.set_binding(
+                    active_row.timeline_plot.plot,
+                    active_row.track,
+                    active_row.track.track_id,
+                )
+
+        if hasattr(self, "_key_edit"):
+            self._key_edit.timeline = self.timeline
+
+        if hasattr(self, "mouse"):
+            self.mouse.timeline = self.timeline
+
+        if hasattr(self, "sel"):
+            self.sel.clear()
+
+        self.undo.clear()
+        self.undo.setClean()
+
+        self.toolbar.set_duration(self.timeline.duration_s)
+        self.toolbar.set_interp(self._current_track().interp.value)
+        self.toolbar.set_rate(self.sample_rate_hz)
+
+        self.playback.set_playhead(0.0)
+        self.plotw.fit_x()
+        self.plotw.fit_y(0.15)
+        self._refresh_view()
+
     def _init_model_state(self) -> None:
         # --- Model ---
         self.timeline = Timeline()
