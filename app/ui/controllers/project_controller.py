@@ -32,43 +32,7 @@ class ProjectController:
         sample_rate: Optional[float] = None,
         path: Optional[Path] = None,
     ) -> None:
-        window = self._window
-
-        window.timeline = timeline
-        if sample_rate is not None:
-            window.sample_rate_hz = float(sample_rate)
-
-        window.track_container.set_timeline(window.timeline)
-        window.track_container.update_duration(window.timeline.duration_s)
-        window._on_track_rows_changed()
-        window.playback.set_timeline(window.timeline)
-
-        if hasattr(window, "_pos_provider"):
-            active_row = window.track_container.active_row
-            if active_row is not None:
-                window._pos_provider.set_binding(
-                    active_row.timeline_plot.plot,
-                    active_row.track,
-                    active_row.track.track_id,
-                )
-
-        if hasattr(window, "_key_edit"):
-            window._key_edit.timeline = window.timeline
-
-        window.mouse.timeline = window.timeline
-        window.sel.clear()
-
-        window.undo.clear()
-        window.undo.setClean()
-
-        window.toolbar.set_duration(window.timeline.duration_s)
-        window.toolbar.set_interp(window._current_track().interp.value)
-        window.toolbar.set_rate(window.sample_rate_hz)
-
-        window.playback.set_playhead(0.0)
-        window.plotw.fit_x()
-        window.plotw.fit_y(0.15)
-        window._refresh_view()
+        self._window.apply_project_state(timeline, sample_rate=sample_rate)
 
         self._current_project_path = path
         self._update_window_title()
