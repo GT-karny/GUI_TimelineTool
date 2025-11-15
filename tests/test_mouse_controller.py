@@ -52,8 +52,9 @@ from app.interaction.selection import SelectionManager, KeyPoint, KeyPosProvider
 class DummyProvider(KeyPosProvider):
     """Minimal key position provider backed by a dictionary."""
 
-    def __init__(self, mapping: Dict[KeyPoint, QtCore.QPointF]):
+    def __init__(self, mapping: Dict[KeyPoint, QtCore.QPointF], track_id: str):
         self._mapping = mapping
+        self.track_id = track_id
 
     def iter_all_keypoints(self) -> Iterable[KeyPoint]:
         return self._mapping.keys()
@@ -74,8 +75,9 @@ def _build_controller(qapp: QtWidgets.QApplication) -> tuple[MouseController, Ti
     timeline = Timeline()
     plot = pg.PlotWidget()
     key = timeline.track.keys[0]
-    kp = KeyPoint(track_id=0, key_id=id(key), t=key.t, v=key.v)
-    provider = DummyProvider({kp: QtCore.QPointF(key.t, key.v)})
+    track_id = timeline.track.track_id
+    kp = KeyPoint(track_id=track_id, key_id=id(key), t=key.t, v=key.v)
+    provider = DummyProvider({kp: QtCore.QPointF(key.t, key.v)}, track_id=track_id)
     selection = SelectionManager(plot.scene(), provider)
     controller = MouseController(
         plot_widget=plot,
@@ -92,7 +94,7 @@ def _build_controller(qapp: QtWidgets.QApplication) -> tuple[MouseController, Ti
 def test_key_drag_lifecycle(qapp) -> None:
     controller, timeline, plot = _build_controller(qapp)
     key = timeline.track.keys[0]
-    hit = KeyPoint(track_id=0, key_id=id(key), t=key.t, v=key.v)
+    hit = KeyPoint(track_id=timeline.track.track_id, key_id=id(key), t=key.t, v=key.v)
     commits: list[tuple[Keyframe, tuple[float, float], tuple[float, float]]] = []
     controller.commit_drag = lambda k, start, end: commits.append((k, start, end))
 

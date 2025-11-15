@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core.timeline import Track
 from ..playback.controller import PlaybackController
@@ -12,6 +12,8 @@ from .timeline_plot import TimelinePlot
 
 class TrackRow(QtWidgets.QWidget):
     """1トラック分のラベルとタイムラインプロットをまとめた行。"""
+
+    activated = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -25,6 +27,7 @@ class TrackRow(QtWidgets.QWidget):
 
         self._track = track
         self._duration_s = float(duration_s)
+        self._active = False
 
         self.label = QtWidgets.QLabel(track.name, self)
         self.label.setMinimumWidth(120)
@@ -35,6 +38,23 @@ class TrackRow(QtWidgets.QWidget):
         self.timeline_plot.set_duration(self._duration_s)
         if playback is not None:
             self.timeline_plot.set_playback_controller(playback)
+
+        self.setObjectName("TrackRow")
+        self.setProperty("active", False)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setStyleSheet(
+            """
+            #TrackRow[active="true"] {
+                border: 1px solid rgba(0, 120, 215, 180);
+                background-color: rgba(0, 120, 215, 30);
+                border-radius: 4px;
+            }
+            #TrackRow[active="false"] {
+                border: 1px solid transparent;
+                background-color: transparent;
+            }
+            """
+        )
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -63,3 +83,22 @@ class TrackRow(QtWidgets.QWidget):
         """トラックの最新状態を反映。"""
         self.label.setText(self._track.name)
         self.timeline_plot.update_curve()
+
+    def set_active(self, active: bool) -> None:
+        if self._active == active:
+            return
+        self._active = bool(active)
+        self.setProperty("active", self._active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    # ---- Qt events -----------------------------------------------------
+    def focusInEvent(self, event: QtGui.QFocusEvent) -> None:  # type: ignore[override]
+        self.activated.emit(self)
+        super().focusInEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.LeftButton:
+            self.activated.emit(self)
+        super().mousePressEvent(event)
