@@ -7,7 +7,13 @@ from PySide6 import QtWidgets, QtCore
 from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
-from ..core.timeline import Timeline, Keyframe, InterpMode, Track
+from ..core.timeline import (
+    Timeline,
+    Keyframe,
+    InterpMode,
+    Track,
+    initialize_handle_positions,
+)
 from ..core.interpolation import evaluate
 from ..services.export_dialog import export_timeline_csv_via_dialog
 from .controllers import ProjectController, TelemetryController
@@ -264,6 +270,11 @@ class MainWindow(QtWidgets.QMainWindow):
         except ValueError:
             logger.warning("Unknown interpolation mode requested: %s", name)
             return
+
+        if track.interp == InterpMode.BEZIER:
+            for key in list(track.keys):
+                initialize_handle_positions(track, key)
+
         if hasattr(self, "toolbar"):
             self.toolbar.set_interp(track.interp.value)
         self._refresh_view()

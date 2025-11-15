@@ -109,6 +109,115 @@ class Keyframe:
         if dv:
             self.set_value(self.v + dv)
 
+
+def initialize_handle_positions(
+    track: "Track",
+    key: Keyframe,
+    *,
+    fraction: float = 1.0 / 3.0,
+    eps: float = 1e-9,
+) -> None:
+    """Separate newly-created Bezier handles from the key position."""
+
+    if getattr(track, "interp", None) != InterpMode.BEZIER:
+        return
+
+    handle_in = key.handle_in
+    handle_out = key.handle_out
+
+    if handle_in is None and handle_out is None:
+        return
+
+    keys = track.sorted()
+    try:
+        idx = keys.index(key)
+    except ValueError:  # pragma: no cover - defensive
+        return
+
+    prev_key = keys[idx - 1] if idx > 0 else None
+    next_key = keys[idx + 1] if idx + 1 < len(keys) else None
+
+    def _needs_adjust(handle: Handle | None) -> bool:
+        if handle is None:
+            return False
+        return abs(handle.t - key.t) < eps and abs(handle.v - key.v) < eps
+
+    def _fallback_span() -> float:
+        if len(keys) < 2:
+            return 1.0
+        span_candidates = [
+            abs(keys[i + 1].t - keys[i].t) for i in range(len(keys) - 1)
+        ]
+        span = max(span_candidates, default=1.0)
+        return span if span > eps else 1.0
+
+    def _apply_defaults(handle: Handle | None, direction: str) -> None:
+        if handle is None or not _needs_adjust(handle):
+            return
+
+        target_t = key.t
+        target_v = key.v
+
+        if direction == "in":
+            source = prev_key
+            fallback_source = next_key
+        else:
+            source = next_key
+            fallback_source = prev_key
+
+        segment = None
+        if source is not None and abs(source.t - key.t) > eps:
+            segment = source
+        elif fallback_source is not None and abs(fallback_source.t - key.t) > eps:
+            segment = fallback_source
+
+        if segment is not None:
+            if direction == "in" and segment.t > key.t:
+                span_t = segment.t - key.t
+                slope = (segment.v - key.v) / span_t
+                dt = span_t * fraction
+                target_t = key.t - dt
+                target_v = key.v - slope * dt
+            elif direction == "out" and segment.t < key.t:
+                span_t = key.t - segment.t
+                slope = (key.v - segment.v) / span_t
+                dt = span_t * fraction
+                target_t = key.t + dt
+                target_v = key.v + slope * dt
+            else:
+                span_t = abs(segment.t - key.t)
+                slope = (segment.v - key.v) / (segment.t - key.t)
+                dt = span_t * fraction
+                if direction == "in":
+                    target_t = key.t - dt
+                    target_v = key.v - slope * dt
+                else:
+                    target_t = key.t + dt
+                    target_v = key.v + slope * dt
+        else:
+            span_t = _fallback_span() * fraction
+            if direction == "in":
+                target_t = key.t - span_t
+                target_v = key.v
+            else:
+                target_t = key.t + span_t
+                target_v = key.v
+
+        if direction == "in":
+            target_t = max(0.0, target_t)
+
+        if abs(target_t - key.t) < eps and abs(target_v - key.v) < eps:
+            if direction == "in":
+                target_v = key.v - 1e-3
+            else:
+                target_v = key.v + 1e-3
+
+        handle.t = float(target_t)
+        handle.v = float(target_v)
+
+    _apply_defaults(handle_in, "in")
+    _apply_defaults(handle_out, "out")
+
 def _default_keys() -> List[Keyframe]:
     return [Keyframe(0.0, 0.0), Keyframe(5.0, 0.0)]
 
@@ -123,6 +232,14 @@ class Track:
     interp: InterpMode = InterpMode.CUBIC
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
+    _init_handles: bool = field(default=True, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self._init_handles or self.interp != InterpMode.BEZIER:
+            return
+
+        for key in list(self.keys):
+            initialize_handle_positions(self, key)
 
     def sorted(self) -> List[Keyframe]:
         return sorted(self.keys, key=lambda k: (k.t, k.v))

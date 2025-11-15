@@ -15,7 +15,7 @@ from ..actions.undo_commands import (
     MoveHandleCommand,
     MoveKeyCommand,
 )
-from ..core.timeline import Handle, Keyframe, Timeline, Track
+from ..core.timeline import Handle, Keyframe, Timeline, Track, initialize_handle_positions
 from .selection import KeyPoint, KeyPosProvider, SelectedKey, SelectionManager
 
 
@@ -264,5 +264,6 @@ class KeyEditService:
         )
         track.keys.append(key)
         track.clamp_times()
+        initialize_handle_positions(track, key)
         return key
 

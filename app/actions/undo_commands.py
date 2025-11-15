@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import List, Optional, Sequence, Tuple
 from PySide6.QtGui import QUndoCommand
-from ..core.timeline import Timeline, Keyframe, Track, Handle
+from ..core.timeline import (
+    Timeline,
+    Keyframe,
+    Track,
+    Handle,
+    initialize_handle_positions,
+)
 
 
 def _find_track(tl: Timeline, track_id: str) -> Optional[Track]:
@@ -62,9 +68,13 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
                 self._handle_out, fallback_t=self.t, fallback_v=self.v
             )
             self.k = Keyframe(self.t, self.v, handle_in=handle_in, handle_out=handle_out)
+        appended = False
         if self.k not in track.keys:
             track.keys.append(self.k)
+            appended = True
+        if appended:
             self._clamp(track)
+        initialize_handle_positions(track, self.k)
 
     def undo(self):
         track = _find_track(self.tl, self.track_id)
