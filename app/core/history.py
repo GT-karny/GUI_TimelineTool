@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List
 
 from .timeline import Timeline, Keyframe, Track, InterpMode
@@ -21,7 +21,17 @@ class _TrackSnapshot:
 
 
 def _clone_keyframes(keys: List[Keyframe]) -> List[Keyframe]:
-    return [Keyframe(k.t, k.v) for k in keys]
+    cloned: List[Keyframe] = []
+    for k in keys:
+        cloned.append(
+            Keyframe(
+                k.t,
+                k.v,
+                handle_in=replace(k.handle_in) if k.handle_in is not None else None,
+                handle_out=replace(k.handle_out) if k.handle_out is not None else None,
+            )
+        )
+    return cloned
 
 
 def _snapshot_from_timeline(timeline: Timeline) -> _TimelineSnapshot:
@@ -51,6 +61,7 @@ def _apply_snapshot(dest: Timeline, snap: _TimelineSnapshot) -> None:
                 interp=InterpMode(track_snap.interp),
                 keys=_clone_keyframes(track_snap.keys),
                 track_id=track_snap.track_id,
+                _init_handles=False,
             )
         else:
             source.name = track_snap.name

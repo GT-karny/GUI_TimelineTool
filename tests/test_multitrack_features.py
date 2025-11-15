@@ -3,7 +3,13 @@ import csv
 import pytest
 
 from app.core.history import TimelineHistory
-from app.core.timeline import Keyframe, Track
+from app.core.timeline import (
+    InterpMode,
+    Keyframe,
+    Timeline,
+    Track,
+    initialize_handle_positions,
+)
 from app.io.csv_exporter import build_csv_table, write_csv
 
 
@@ -83,3 +89,30 @@ def test_timeline_history_tracks_support_undo_redo(multitrack_project):
 
     assert history.redo() is True
     assert [track.track_id for track in timeline.tracks] == baseline_ids
+
+
+def test_bezier_handles_are_offset_after_reset_like_initialization():
+    timeline = Timeline(duration_s=5.0)
+    track = timeline.track
+    track.interp = InterpMode.BEZIER
+
+    keyframes = [
+        Keyframe(0.0, 0.0),
+        Keyframe(timeline.duration_s, 0.0),
+    ]
+    track.keys.clear()
+    track.keys.extend(keyframes)
+
+    for key in keyframes:
+        initialize_handle_positions(track, key)
+
+    eps = 1e-12
+    for key in keyframes:
+        assert key.handle_in is not None
+        assert key.handle_out is not None
+        assert not (
+            abs(key.handle_in.t - key.t) < eps and abs(key.handle_in.v - key.v) < eps
+        ), "Incoming handle should be offset from the key position"
+        assert not (
+            abs(key.handle_out.t - key.t) < eps and abs(key.handle_out.v - key.v) < eps
+        ), "Outgoing handle should be offset from the key position"

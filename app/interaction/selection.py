@@ -11,17 +11,36 @@ import pyqtgraph as pg
 @dataclass(frozen=True)
 class KeyPoint:
     track_id: str
-    key_id: int       # 安定ID推奨（暫定は id(key_obj) でも可）
+    key_id: int       # owner key id
     t: float
     v: float
+    component: str = "key"
+    item_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.item_id is None:
+            object.__setattr__(self, "item_id", int(self.key_id))
+
+    def to_selected(self) -> "SelectedKey":
+        return SelectedKey(self.track_id, self.key_id, self.component, self.item_id)
 
 
 @dataclass(frozen=True)
 class SelectedKey:
-    """選択されたキーを識別する (track_id, key_id) の構造体。"""
+    """選択されたキー/ハンドルを識別する構造体。"""
 
     track_id: str
     key_id: int
+    component: str = "key"
+    item_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.item_id is None:
+            object.__setattr__(self, "item_id", int(self.key_id))
+
+    @property
+    def is_key(self) -> bool:
+        return self.component == "key"
 
 
 # ---- 座標提供インタフェース（トラック種類を知らないため）----
@@ -54,21 +73,77 @@ class SelectionManager:
     def clear(self) -> None:
         self.selected.clear()
 
-    def set_single(self, track_id: str, key_id: int) -> None:
-        self.selected = {SelectedKey(str(track_id), int(key_id))}
-
-    def add(self, track_id: str, key_id: int) -> None:
-        self.selected.add(SelectedKey(str(track_id), int(key_id)))
-
-    def discard(self, track_id: str, key_id: int) -> None:
-        self.selected.discard(SelectedKey(str(track_id), int(key_id)))
-
-    def toggle(self, track_id: str, key_id: int) -> None:
-        k = SelectedKey(str(track_id), int(key_id))
-        if k in self.selected:
-            self.selected.remove(k)
+    def _make_selected(
+        self,
+        track_id: str,
+        key_id: int,
+        *,
+        component: str = "key",
+        item_id: int | None = None,
+    ) -> SelectedKey:
+        track_id = str(track_id)
+        key_id = int(key_id)
+        if item_id is None:
+            item_id = key_id
         else:
-            self.selected.add(k)
+            item_id = int(item_id)
+        return SelectedKey(track_id, key_id, component, item_id)
+
+    def set_single(
+        self,
+        track_id: str,
+        key_id: int,
+        *,
+        component: str = "key",
+        item_id: int | None = None,
+    ) -> None:
+        self.selected = {self._make_selected(track_id, key_id, component=component, item_id=item_id)}
+
+    def set_single_point(self, point: KeyPoint) -> None:
+        self.selected = {point.to_selected()}
+
+    def add(
+        self,
+        track_id: str,
+        key_id: int,
+        *,
+        component: str = "key",
+        item_id: int | None = None,
+    ) -> None:
+        self.selected.add(self._make_selected(track_id, key_id, component=component, item_id=item_id))
+
+    def add_point(self, point: KeyPoint) -> None:
+        self.selected.add(point.to_selected())
+
+    def discard(
+        self,
+        track_id: str,
+        key_id: int,
+        *,
+        component: str = "key",
+        item_id: int | None = None,
+    ) -> None:
+        self.selected.discard(self._make_selected(track_id, key_id, component=component, item_id=item_id))
+
+    def discard_point(self, point: KeyPoint) -> None:
+        self.discard(point.track_id, point.key_id, component=point.component, item_id=point.item_id)
+
+    def toggle(
+        self,
+        track_id: str,
+        key_id: int,
+        *,
+        component: str = "key",
+        item_id: int | None = None,
+    ) -> None:
+        sel = self._make_selected(track_id, key_id, component=component, item_id=item_id)
+        if sel in self.selected:
+            self.selected.remove(sel)
+        else:
+            self.selected.add(sel)
+
+    def toggle_point(self, point: KeyPoint) -> None:
+        self.toggle(point.track_id, point.key_id, component=point.component, item_id=point.item_id)
 
     def retain_tracks(self, valid_track_ids: Iterable[str]) -> None:
         """存在しないトラックに紐づく選択を破棄する。"""
@@ -94,6 +169,8 @@ class SelectionManager:
 
         grouped: Dict[str, Set[int]] = {}
         for sel in self.selected:
+            if not sel.is_key:
+                continue
             grouped.setdefault(sel.track_id, set()).add(sel.key_id)
         return grouped
 
@@ -137,9 +214,11 @@ class SelectionManager:
 
         newly: Set[SelectedKey] = set()
         for kp in self._provider.iter_all_keypoints():
+            if kp.component != "key":
+                continue
             sp = self._provider.scene_pos_of(kp)
             if rect.contains(sp):
-                newly.add(SelectedKey(kp.track_id, kp.key_id))
+                newly.add(kp.to_selected())
 
         if additive:
             self.selected |= newly

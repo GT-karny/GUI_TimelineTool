@@ -1,13 +1,13 @@
 # GUI Timeline Tool
 
-> 現在のアプリケーションバージョン: **0.6.0**（`app/version.py` の `APP_VERSION` を参照）
+> 現在のアプリケーションバージョン: **0.8.0**（`app/version.py` の `APP_VERSION` を参照）
 
 GUI Timeline Tool は、複数の Float トラックをキーフレームで編集し、再生や外部出力に活用できる Python + Qt ベースのタイムラインエ
 ディタです。トラックごとの補間モードや値を可視化しながら、CSV エクスポートや UDP テレメトリを備えたスタンドアロンアプリケーション
 として開発を進めています。
 
 ## 主な機能
-- 複数 Float トラックでのキーフレーム追加・編集・削除、補間方式（Cubic / Linear / Step）の切り替え
+- 複数 Float トラックでのキーフレーム追加・編集・削除、補間方式（Cubic / Linear / Step / Bezier）の切り替えとハンドル編集
 - トラックリストからの追加・並べ替え・削除操作と Undo/Redo 対応
 - Inspector パネルからの数値編集、Undo/Redo 対応のドラッグ操作
 - 再生・停止・ループ切り替え、ズーム/フィットなどのビュー操作
@@ -52,6 +52,7 @@ pyinstaller --clean --noconfirm tools/timeline_tool.spec
 - 単一キーを選択すると Inspector パネルに時刻と値が表示され、直接編集できます。
 - 右クリックメニューの *Delete Nearest* で近傍キーを削除できます。
 - トラックヘッダーのコンテキストメニューから新規トラックの追加や削除、並べ替えが行えます。Undo/Redo で取り消し・やり直しが可能です。
+- ツールバーの `Interpolation` コンボボックスで `cubic` / `linear` / `step` / `bezier` を切り替えられます。`bezier` を選ぶと各キーにハンドルが表示され、ドラッグで曲線の入り具合や勢いを細かく調整できます（Inspector から数値入力することも可能）。
 
 ### CSV エクスポート
 1. メニューバーの **File → Export CSV…** を選択します。

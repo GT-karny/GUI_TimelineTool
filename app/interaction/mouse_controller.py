@@ -155,9 +155,9 @@ class MouseController(QtCore.QObject):
         hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=10)
         if hit is not None:
             if self._is_shift(ev):
-                self.sel.add(hit.track_id, hit.key_id)
+                self.sel.add_point(hit)
             else:
-                self.sel.set_single(hit.track_id, hit.key_id)
+                self.sel.set_single_point(hit)
             self.key_edit.begin_drag(hit)
             self.on_changed()
         else:

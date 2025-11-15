@@ -3,9 +3,19 @@ from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 
 
+INTERP_MODE_OPTIONS = [
+    ("cubic", "Cubic"),
+    ("linear", "Linear"),
+    ("step", "Step"),
+    ("bezier", "Bezier (Handles)"),
+]
+
+INTERP_MODE_LABELS = {value: label for value, label in INTERP_MODE_OPTIONS}
+
+
 class TimelineToolbar(QtWidgets.QToolBar):
     # ---- 外向きシグナル ----
-    sig_interp_changed = QtCore.Signal(str)     # "cubic" | "linear" | "step"
+    sig_interp_changed = QtCore.Signal(str)     # "cubic" | "linear" | "step" | "bezier"
     sig_duration_changed = QtCore.Signal(float) # seconds
     sig_rate_changed = QtCore.Signal(float)     # Hz
     sig_add = QtCore.Signal()
@@ -24,7 +34,8 @@ class TimelineToolbar(QtWidgets.QToolBar):
 
         # --- Widgets ---
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["cubic", "linear", "step"])
+        for value, label in INTERP_MODE_OPTIONS:
+            self.mode_combo.addItem(label, userData=value)
 
         self.duration = QtWidgets.QDoubleSpinBox()
         self.duration.setRange(0.1, 10000.0)
@@ -78,7 +89,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
             self.addWidget(b)
 
         # --- Wiring (emit clean signals only) ---
-        self.mode_combo.currentTextChanged.connect(self.sig_interp_changed)
+        self.mode_combo.currentIndexChanged.connect(self._emit_interp_changed)
         self.duration.valueChanged.connect(self.sig_duration_changed)
         self.rate.valueChanged.connect(self.sig_rate_changed)
         self.btn_add.clicked.connect(self.sig_add.emit)
@@ -94,14 +105,19 @@ class TimelineToolbar(QtWidgets.QToolBar):
 
     # ---- Optional: 外部からの更新用ヘルパ ----
     def set_interp(self, name: str) -> None:
-        """'cubic'|'linear'|'step' をUIに反映（signalは出さない）。"""
-        i = self.mode_combo.findText(name)
+        """'cubic'|'linear'|'step'|'bezier' をUIに反映（signalは出さない）。"""
+        i = self.mode_combo.findData(name)
         if i >= 0:
             # note: setCurrentIndexはcurrentTextChangedを発火するので、
             # 外部からのUI同期で signal を抑えたい場合は blockSignals を使う。
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(i)
             self.mode_combo.blockSignals(False)
+
+    def _emit_interp_changed(self, index: int) -> None:
+        mode = self.mode_combo.itemData(index)
+        if mode is not None:
+            self.sig_interp_changed.emit(str(mode))
 
     def set_duration(self, seconds: float) -> None:
         self.duration.blockSignals(True)

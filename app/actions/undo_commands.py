@@ -1,8 +1,15 @@
 # actions/undo_commands.py
 from __future__ import annotations
+from dataclasses import replace
 from typing import List, Optional, Sequence, Tuple
 from PySide6.QtGui import QUndoCommand
-from ..core.timeline import Timeline, Keyframe, Track
+from ..core.timeline import (
+    Timeline,
+    Keyframe,
+    Track,
+    Handle,
+    initialize_handle_positions,
+)
 
 
 def _find_track(tl: Timeline, track_id: str) -> Optional[Track]:
@@ -18,23 +25,56 @@ class _ClampMixin:
 
 
 class AddKeyCommand(QUndoCommand, _ClampMixin):
-    def __init__(self, tl: Timeline, track_id: str, t: float, v: float,
-                 label: str = "Add Key", parent: Optional[QUndoCommand] = None):
+    def __init__(
+        self,
+        tl: Timeline,
+        track_id: str,
+        t: float,
+        v: float,
+        *,
+        handle_in: Handle | Sequence[float] | Tuple[float, float] | None = None,
+        handle_out: Handle | Sequence[float] | Tuple[float, float] | None = None,
+        label: str = "Add Key",
+        parent: Optional[QUndoCommand] = None,
+    ):
         super().__init__(label, parent)
         self.tl = tl
         self.track_id = str(track_id)
         self.k: Keyframe | None = None
         self.t, self.v = float(t), float(v)
+        self._handle_in = handle_in
+        self._handle_out = handle_out
+
+    def _clone_handle_data(self, data, *, fallback_t: float, fallback_v: float) -> Handle:
+        if data is None:
+            return Handle(fallback_t, fallback_v)
+        if isinstance(data, Handle):
+            return replace(data)
+        if isinstance(data, (list, tuple)) and len(data) == 2:
+            return Handle(float(data[0]), float(data[1]))
+        if isinstance(data, dict):
+            return Handle.from_mapping(data, default_t=fallback_t, default_v=fallback_v)
+        return Handle(fallback_t, fallback_v)
 
     def redo(self):
         track = _find_track(self.tl, self.track_id)
         if track is None:
             return
         if self.k is None:
-            self.k = Keyframe(self.t, self.v)
+            handle_in = self._clone_handle_data(
+                self._handle_in, fallback_t=self.t, fallback_v=self.v
+            )
+            handle_out = self._clone_handle_data(
+                self._handle_out, fallback_t=self.t, fallback_v=self.v
+            )
+            self.k = Keyframe(self.t, self.v, handle_in=handle_in, handle_out=handle_out)
+        appended = False
         if self.k not in track.keys:
             track.keys.append(self.k)
+            appended = True
+        if appended:
             self._clamp(track)
+        initialize_handle_positions(track, self.k)
 
     def undo(self):
         track = _find_track(self.tl, self.track_id)
@@ -93,8 +133,11 @@ class MoveKeyCommand(QUndoCommand, _ClampMixin):
         self.at, self.av = after
 
     def _apply(self, t, v):
-        self.key.t = float(max(0.0, t))
-        self.key.v = float(v)
+        new_t = float(max(0.0, t))
+        new_v = float(v)
+        dt = new_t - self.key.t
+        dv = new_v - self.key.v
+        self.key.translate(dt, dv)
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
@@ -103,6 +146,41 @@ class MoveKeyCommand(QUndoCommand, _ClampMixin):
         self._apply(self.at, self.av)
 
     def undo(self):
+        self._apply(self.bt, self.bv)
+
+
+class MoveHandleCommand(QUndoCommand):
+    def __init__(
+        self,
+        tl: Timeline,
+        track_id: str,
+        key: Keyframe,
+        handle_attr: str,
+        before: Tuple[float, float],
+        after: Tuple[float, float],
+        label: str = "Move Handle",
+        parent: Optional[QUndoCommand] = None,
+    ) -> None:
+        super().__init__(label, parent)
+        self.tl = tl
+        self.track_id = str(track_id)
+        self.key = key
+        self._handle_attr = str(handle_attr)
+        self.bt, self.bv = before
+        self.at, self.av = after
+
+    def _apply(self, t: float, v: float) -> None:
+        handle = getattr(self.key, self._handle_attr, None)
+        if handle is None:
+            handle = Handle(self.key.t, self.key.v)
+            setattr(self.key, self._handle_attr, handle)
+        handle.t = float(t)
+        handle.v = float(v)
+
+    def redo(self) -> None:
+        self._apply(self.at, self.av)
+
+    def undo(self) -> None:
         self._apply(self.bt, self.bv)
 
 
@@ -118,13 +196,13 @@ class SetKeyTimeCommand(QUndoCommand, _ClampMixin):
         self.new_t = float(new_t)
 
     def redo(self):
-        self.key.t = max(0.0, self.new_t)
+        self.key.set_time(max(0.0, self.new_t))
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
 
     def undo(self):
-        self.key.t = max(0.0, self.old_t)
+        self.key.set_time(max(0.0, self.old_t))
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
@@ -139,10 +217,10 @@ class SetKeyValueCommand(QUndoCommand):
         self.new_v = float(new_v)
 
     def redo(self):
-        self.key.v = self.new_v
+        self.key.set_value(self.new_v)
 
     def undo(self):
-        self.key.v = self.old_v
+        self.key.set_value(self.old_v)
 
 
 class AddTrackCommand(QUndoCommand):

@@ -7,13 +7,20 @@ from PySide6 import QtWidgets, QtCore
 from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
-from ..core.timeline import Timeline, Keyframe, InterpMode, Track
+from ..core.timeline import (
+    Timeline,
+    Keyframe,
+    InterpMode,
+    Track,
+    initialize_handle_positions,
+)
 from ..core.interpolation import evaluate
 from ..services.export_dialog import export_timeline_csv_via_dialog
 from .controllers import ProjectController, TelemetryController
 from .track_container import TrackContainer
 from .track_row import TrackRow
 from .toolbar import TimelineToolbar
+from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
 from .telemetry_panel import TelemetryPanel
 
@@ -45,6 +52,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._base_title = self.windowTitle()
         self.resize(1400, 780)
 
+        self._pos_provider: Optional[SingleTrackPosProvider] = None
+        self.sel: Optional[SelectionManager] = None
+        self._key_edit: Optional[KeyEditService] = None
+        self.mouse: Optional[MouseController] = None
+        self.plotw: Optional[TimelinePlot] = None
+
         self._init_model_state()
         self._init_toolbar()
         self._init_central_widgets()
@@ -52,6 +65,58 @@ class MainWindow(QtWidgets.QMainWindow):
         self._init_controllers()
         self._wire_signals()
         self._initialize_view_state()
+
+    def apply_project_state(
+        self,
+        timeline: Timeline,
+        *,
+        sample_rate: Optional[float] = None,
+    ) -> None:
+        """Apply a timeline and related state to the window.
+
+        The method centralizes project-loading behaviour so selection and mouse
+        services, toolbar state, and undo stack are refreshed together.
+        """
+
+        self.timeline = timeline
+        if sample_rate is not None:
+            self.sample_rate_hz = float(sample_rate)
+
+        self.track_container.set_timeline(self.timeline)
+        self.track_container.update_duration(self.timeline.duration_s)
+        self._on_track_rows_changed()
+
+        self.playback.set_timeline(self.timeline)
+
+        if self._pos_provider is not None:
+            active_row = self.track_container.active_row
+            if active_row is not None:
+                self._pos_provider.set_binding(
+                    active_row.timeline_plot.plot,
+                    active_row.track,
+                    active_row.track.track_id,
+                )
+
+        if self._key_edit is not None:
+            self._key_edit.timeline = self.timeline
+
+        if self.mouse is not None:
+            self.mouse.timeline = self.timeline
+
+        if self.sel is not None:
+            self.sel.clear()
+
+        self.undo.clear()
+        self.undo.setClean()
+
+        self.toolbar.set_duration(self.timeline.duration_s)
+        self.toolbar.set_interp(self._current_track().interp.value)
+        self.toolbar.set_rate(self.sample_rate_hz)
+
+        self.playback.set_playhead(0.0)
+        self.plotw.fit_x()
+        self.plotw.fit_y(0.15)
+        self._refresh_view()
 
     def _init_model_state(self) -> None:
         # --- Model ---
@@ -120,12 +185,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menu()
 
     def _wire_signals(self) -> None:
-        # --- Playback controller ---
+        self._connect_playback_signals()
+        self._init_selection_services()
+        self._connect_track_container_signals()
+        self._connect_inspector_signals()
+        self._connect_toolbar_signals()
+        self._connect_telemetry_signals()
+
+    def _connect_playback_signals(self) -> None:
         self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
         self.playback.playing_changed.connect(self._on_playback_state_changed)
         self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
-        # --- Selection / Mouse 配線 ---
+    def _init_selection_services(self) -> None:
         active_row = self.track_container.active_row
         if active_row is None:
             raise RuntimeError("TrackContainer did not provide an active row")
@@ -152,17 +224,17 @@ class MainWindow(QtWidgets.QMainWindow):
             key_edit=self._key_edit,
         )
 
-        # --- Track コンテナ操作 ---
+    def _connect_track_container_signals(self) -> None:
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
         self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
-        # Inspector signals -> apply edits
+    def _connect_inspector_signals(self) -> None:
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
 
-        # --- Wire toolbar signals ---
+    def _connect_toolbar_signals(self) -> None:
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
         self.toolbar.sig_duration_changed.connect(self._on_duration_changed)
         self.toolbar.sig_rate_changed.connect(self._on_rate_changed)
@@ -174,10 +246,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_seek_start.connect(self._on_seek_start)
         self.toolbar.sig_play.connect(self._on_play)
         self.toolbar.sig_stop.connect(self._on_stop)
+        if self.plotw is None:
+            raise RuntimeError("Active plot widget not initialized")
+
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
-        self.telemetry_panel.settings_changed.connect(self.telemetry_controller.on_settings_changed)
+    def _connect_telemetry_signals(self) -> None:
+        self.telemetry_panel.settings_changed.connect(
+            self.telemetry_controller.on_settings_changed
+        )
 
     def _on_track_rows_changed(self) -> None:
         active = self.track_container.active_row or self.track_container.primary_row
@@ -185,7 +263,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._sync_active_row(active)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
 
     def _on_request_add_track(self) -> None:
@@ -197,7 +275,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if row is None:
             return
         self._sync_active_row(row)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
             self._refresh_view()
 
@@ -207,14 +285,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.set_duration(self.timeline.duration_s)
         self.plotw.set_playback_controller(self.playback)
 
-        if hasattr(self, "_pos_provider"):
+        if self._pos_provider is not None:
             self._pos_provider.set_binding(self.plotw.plot, row.track, row.track.track_id)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.set_scene(self.plotw.plot.scene())
-        if hasattr(self, "mouse"):
+        if self.mouse is not None:
             self.mouse.set_plot_widget(self.plotw.plot)
-        if hasattr(self, "toolbar"):
-            self.toolbar.set_interp(row.track.interp.value)
+        self.toolbar.set_interp(row.track.interp.value)
 
     def _current_track(self) -> Track:
         row = self.track_container.active_row
@@ -259,11 +336,17 @@ class MainWindow(QtWidgets.QMainWindow):
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
         track = self._current_track()
-        track.interp = {
-            "cubic": InterpMode.CUBIC,
-            "linear": InterpMode.LINEAR,
-            "step": InterpMode.STEP,
-        }[name]
+        try:
+            track.interp = InterpMode(name)
+        except ValueError:
+            logger.warning("Unknown interpolation mode requested: %s", name)
+            return
+
+        if track.interp == InterpMode.BEZIER:
+            for key in list(track.keys):
+                initialize_handle_positions(track, key)
+
+        self.toolbar.set_interp(track.interp.value)
         self._refresh_view()
 
     def _on_duration_changed(self, seconds: float):
@@ -316,9 +399,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_reset(self):
         track = self._current_track()
+        keyframes = [
+            Keyframe(0.0, 0.0),
+            Keyframe(self.timeline.duration_s, 0.0),
+        ]
+
         track.keys.clear()
-        track.keys.append(Keyframe(0.0, 0.0))
-        track.keys.append(Keyframe(self.timeline.duration_s, 0.0))
+        track.keys.extend(keyframes)
+
+        if track.interp == InterpMode.BEZIER:
+            for key in keyframes:
+                initialize_handle_positions(track, key)
+
         self.sel.clear()
         self._refresh_view()
 
@@ -368,18 +460,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         resolved = self._resolved_selection()
         valid_selected = {SelectedKey(track.track_id, id(key)) for track, key in resolved}
-        if valid_selected != self.sel.selected:
-            self.sel.selected = valid_selected
+        current_key_selected = {sel for sel in self.sel.selected if sel.is_key}
+        if valid_selected != current_key_selected:
+            others = {sel for sel in self.sel.selected if not sel.is_key}
+            self.sel.selected = valid_selected | others
             resolved = self._resolved_selection()
 
-        selection_map: Dict[str, Set[int]] = {}
-        for track, key in resolved:
-            selection_map.setdefault(track.track_id, set()).add(id(key))
+        selection_map: Dict[str, Set[SelectedKey]] = {}
+        for sel in self.sel.selected:
+            selection_map.setdefault(sel.track_id, set()).add(sel)
 
         for row in self.track_container.rows:
             track = row.track
-            ids = selection_map.get(track.track_id, set())
-            row.timeline_plot.update_points(track.sorted(), ids)
+            selected = selection_map.get(track.track_id, set())
+            row.timeline_plot.update_points(selected)
 
         if len(resolved) == 1:
             track, key = resolved[0]
@@ -397,6 +491,19 @@ class MainWindow(QtWidgets.QMainWindow):
             track = track_map.get(sel.track_id)
             if track is None:
                 invalid.add(sel)
+                continue
+            if not sel.is_key:
+                key = next((k for k in track.keys if id(k) == sel.key_id), None)
+                if key is None:
+                    invalid.add(sel)
+                    continue
+                handle = None
+                if sel.component == "handle_in":
+                    handle = key.handle_in
+                elif sel.component == "handle_out":
+                    handle = key.handle_out
+                if handle is None or id(handle) != sel.item_id:
+                    invalid.add(sel)
                 continue
             key = next((k for k in track.keys if id(k) == sel.key_id), None)
             if key is None:
