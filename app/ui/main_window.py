@@ -329,9 +329,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_reset(self):
         track = self._current_track()
+        keyframes = [
+            Keyframe(0.0, 0.0),
+            Keyframe(self.timeline.duration_s, 0.0),
+        ]
+
         track.keys.clear()
-        track.keys.append(Keyframe(0.0, 0.0))
-        track.keys.append(Keyframe(self.timeline.duration_s, 0.0))
+        track.keys.extend(keyframes)
+
+        if track.interp == InterpMode.BEZIER:
+            for key in keyframes:
+                initialize_handle_positions(track, key)
+
         self.sel.clear()
         self._refresh_view()
 
