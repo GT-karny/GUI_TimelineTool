@@ -46,10 +46,15 @@ def test_undo_redo_restores_handle_data() -> None:
     timeline = Timeline(duration_s=2.0, tracks=[_make_bezier_track()])
     history = TimelineHistory(timeline)
 
-    first = timeline.tracks[0].keys[0].handle_out
-    second = timeline.tracks[0].keys[1].handle_in
-    assert first is not None
-    assert second is not None
+    def get_handles() -> tuple[Handle, Handle]:
+        track = timeline.tracks[0]
+        first_handle = track.keys[0].handle_out
+        second_handle = track.keys[1].handle_in
+        assert first_handle is not None
+        assert second_handle is not None
+        return first_handle, second_handle
+
+    first, second = get_handles()
 
     # State B
     first.t, first.v = 0.3, -0.25
@@ -57,21 +62,25 @@ def test_undo_redo_restores_handle_data() -> None:
     history.push()
 
     # State C
+    first, second = get_handles()
     first.t, first.v = 0.45, -0.05
     second.t, second.v = 0.65, 0.95
     history.push()
 
     # Mutate without pushing (state D)
+    first, second = get_handles()
     first.t, first.v = 0.1, 0.0
     second.t, second.v = 0.9, 1.6
 
     assert history.undo() is True
+    first, second = get_handles()
     assert abs(first.t - 0.3) < 1e-12
     assert abs(first.v + 0.25) < 1e-12
     assert abs(second.t - 0.55) < 1e-12
     assert abs(second.v - 1.35) < 1e-12
 
     assert history.redo() is True
+    first, second = get_handles()
     assert abs(first.t - 0.45) < 1e-12
     assert abs(first.v + 0.05) < 1e-12
     assert abs(second.t - 0.65) < 1e-12
