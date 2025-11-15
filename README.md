@@ -1,6 +1,6 @@
 # GUI Timeline Tool
 
-> 現在のアプリケーションバージョン: **0.6.0**（`app/version.py` の `APP_VERSION` を参照）
+> 現在のアプリケーションバージョン: **0.8.0**（`app/version.py` の `APP_VERSION` を参照）
 
 GUI Timeline Tool は、複数の Float トラックをキーフレームで編集し、再生や外部出力に活用できる Python + Qt ベースのタイムラインエ
 ディタです。トラックごとの補間モードや値を可視化しながら、CSV エクスポートや UDP テレメトリを備えたスタンドアロンアプリケーション
