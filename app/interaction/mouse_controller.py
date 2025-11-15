@@ -9,7 +9,7 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import QPointF
 import pyqtgraph as pg
 
-from ..core.timeline import Timeline, Keyframe
+from ..core.timeline import Timeline, Keyframe, Track
 from ..core.interpolation import evaluate
 from .selection import SelectionManager, KeyPoint, KeyPosProvider
 
@@ -103,6 +103,16 @@ class MouseController(QtCore.QObject):
         self.add_key_cb = add_key_cb
         self.delete_key_cb = delete_key_cb
 
+    def set_plot_widget(self, plot_widget: pg.PlotWidget) -> None:
+        if self.plot is plot_widget:
+            return
+        try:
+            self.plot.scene().removeEventFilter(self)
+        except Exception:
+            pass
+        self.plot = plot_widget
+        self.plot.scene().installEventFilter(self)
+
     # ---- ショートカット ----
     @property
     def vb(self) -> pg.ViewBox:
@@ -112,9 +122,17 @@ class MouseController(QtCore.QObject):
         return self.vb.mapSceneToView(p)
 
     # ---- KeyPoint -> Keyframe 解決（単一トラック前提の簡易版）----
+    def _track_for_id(self, track_id: str) -> Optional[Track]:
+        for track in self.timeline.iter_tracks():
+            if track.track_id == track_id:
+                return track
+        return None
+
     def _resolve_key(self, kp: KeyPoint) -> Optional[Keyframe]:
-        # 暫定：key_id は id(key) を想定。将来は安定IDに置換。
-        for k in self.timeline.track.sorted():
+        track = self._track_for_id(kp.track_id)
+        if track is None:
+            return None
+        for k in track.keys:
             if id(k) == kp.key_id:
                 return k
         return None
@@ -218,7 +236,7 @@ class MouseController(QtCore.QObject):
         v = float(vp.y())
         kf = self._create_keyframe(t, v)
         if kf is not None:
-            self.sel.set_single(0, id(kf))
+            self.sel.set_single(self.provider.track_id, id(kf))
             self.on_changed()
         return True
 
@@ -307,7 +325,9 @@ class MouseController(QtCore.QObject):
         mp = self._scene_to_view(scene_pos)
         key.t = float(max(0.0, mp.x()))
         key.v = float(mp.y())
-        self.timeline.track.clamp_times()
+        track = self._track_for_id(key_point.track_id)
+        if track is not None:
+            track.clamp_times()
         self.on_changed()
         return True
 
@@ -382,7 +402,7 @@ class MouseController(QtCore.QObject):
             t, v = float(max(0.0, vp.x())), float(vp.y())
             kf = self._create_keyframe(t, v)
             if kf is not None:
-                self.sel.set_single(0, id(kf))
+                self.sel.set_single(self.provider.track_id, id(kf))
                 self.on_changed()
 
         elif chosen is act_del:
@@ -399,8 +419,9 @@ class MouseController(QtCore.QObject):
                     self.delete_key_cb(key)
                 else:
                     # フォールバック（Undoなし直書き）
-                    if key in self.timeline.track.keys:
-                        self.timeline.track.keys.remove(key)
+                    track = self._track_for_id(hit.track_id)
+                    if track and key in track.keys:
+                        track.keys.remove(key)
                 self.on_changed()
                 return
             except Exception:
@@ -413,6 +434,9 @@ class MouseController(QtCore.QObject):
         if self.add_key_cb:
             return self.add_key_cb(t, v)
         kf = Keyframe(t, v)
-        self.timeline.track.keys.append(kf)
-        self.timeline.track.clamp_times()
+        track = self._track_for_id(str(self.provider.track_id))
+        if track is None:
+            return None
+        track.keys.append(kf)
+        track.clamp_times()
         return kf

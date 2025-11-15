@@ -76,6 +76,19 @@ class SelectionManager:
         valid = {str(tid) for tid in valid_track_ids}
         self.selected = {sel for sel in self.selected if sel.track_id in valid}
 
+    def set_scene(self, scene: QtWidgets.QGraphicsScene) -> None:
+        if self._scene is scene:
+            return
+        if self._marquee_rect_item is not None:
+            try:
+                self._scene.removeItem(self._marquee_rect_item)
+            except Exception:
+                pass
+            self._marquee_rect_item = None
+        self._marquee_active = False
+        self._marquee_start_scene = None
+        self._scene = scene
+
     def grouped_by_track(self) -> Dict[str, Set[int]]:
         """track_id -> {key_id} の辞書を返す。"""
 

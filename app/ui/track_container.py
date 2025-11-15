@@ -16,6 +16,7 @@ class TrackContainer(QtWidgets.QWidget):
     request_add_track = QtCore.Signal()
     request_remove_track = QtCore.Signal(str)
     rows_changed = QtCore.Signal()
+    active_row_changed = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -28,6 +29,8 @@ class TrackContainer(QtWidgets.QWidget):
         self._playback = playback
         self._timeline: Optional[Timeline] = None
         self._rows: List[TrackRow] = []
+        self._active_row: Optional[TrackRow] = None
+        self._active_track_id: Optional[str] = None
 
         self._build_ui()
 
@@ -51,6 +54,35 @@ class TrackContainer(QtWidgets.QWidget):
     @property
     def primary_row(self) -> Optional[TrackRow]:
         return self._rows[0] if self._rows else None
+
+    @property
+    def active_row(self) -> Optional[TrackRow]:
+        return self._active_row
+
+    def set_active_row(self, row: Optional[TrackRow]) -> None:
+        if row is not None and row not in self._rows:
+            return
+        if row is self._active_row:
+            return
+
+        if self._active_row is not None:
+            self._active_row.set_active(False)
+
+        self._active_row = row
+        self._active_track_id = row.track.track_id if row is not None else None
+
+        if row is not None:
+            row.set_active(True)
+            row.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+        self.active_row_changed.emit(row)
+
+    def set_active_track(self, track_id: str) -> bool:
+        for row in self._rows:
+            if row.track.track_id == track_id:
+                self.set_active_row(row)
+                return True
+        return False
 
     # ---- UI helpers ----
     def _build_ui(self) -> None:
@@ -114,6 +146,7 @@ class TrackContainer(QtWidgets.QWidget):
                 row.refresh()
             else:
                 row = TrackRow(track, playback=self._playback, duration_s=duration, parent=self)
+                row.activated.connect(self._on_row_activated)
             new_rows.append(row)
             self._rows_layout.addWidget(row)
 
@@ -123,6 +156,8 @@ class TrackContainer(QtWidgets.QWidget):
             row.deleteLater()
 
         self._rows = new_rows
+
+        self._restore_active_row()
 
         self._link_viewboxes()
         self._update_remove_enabled()
@@ -151,3 +186,21 @@ class TrackContainer(QtWidgets.QWidget):
     def _update_remove_enabled(self) -> None:
         count = len(self._rows)
         self.btn_remove.setEnabled(count > 1)
+
+    def _on_row_activated(self, row: TrackRow) -> None:
+        self.set_active_row(row)
+
+    def _restore_active_row(self) -> None:
+        if not self._rows:
+            self.set_active_row(None)
+            return
+
+        if self._active_track_id:
+            for row in self._rows:
+                if row.track.track_id == self._active_track_id:
+                    self.set_active_row(row)
+                    break
+            else:
+                self.set_active_row(self._rows[0])
+        else:
+            self.set_active_row(self._rows[0])

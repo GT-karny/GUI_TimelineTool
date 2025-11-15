@@ -19,3 +19,11 @@ class SingleTrackPosProvider:
 
     def scene_pos_of(self, kp: KeyPoint):
         return self.vb.mapViewToScene(QPointF(kp.t, kp.v))
+
+    def set_binding(self, plot_widget: pg.PlotWidget, track, track_id: str | None = None) -> None:
+        self.vb = plot_widget.plotItem.vb
+        self.track = track
+        if track_id is not None:
+            self.track_id = str(track_id)
+        else:
+            self.track_id = getattr(track, "track_id", self.track_id)
