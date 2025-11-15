@@ -4,6 +4,45 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import importlib
+import os
+import sys
+
+_existing_modules = set(sys.modules)
+_previous_env = os.environ.get("TIMELINE_TOOL_USE_QT_STUBS")
+_using_stubs = False
+
+try:
+    importlib.import_module("PySide6.QtWidgets")
+except Exception:
+    _using_stubs = True
+    os.environ["TIMELINE_TOOL_USE_QT_STUBS"] = "1"
+    sitecustomize = importlib.import_module("sitecustomize")
+    importlib.reload(sitecustomize)
+finally:
+    if _previous_env is None:
+        os.environ.pop("TIMELINE_TOOL_USE_QT_STUBS", None)
+    else:
+        os.environ["TIMELINE_TOOL_USE_QT_STUBS"] = _previous_env
+
+_stub_modules = (
+    {name for name in sys.modules if name not in _existing_modules and name.startswith("PySide6")}
+    if _using_stubs
+    else set()
+)
+
+
+import pytest
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_qt_stubs():
+    try:
+        yield
+    finally:
+        for name in _stub_modules:
+            sys.modules.pop(name, None)
+
 from app.core.timeline import Timeline
 from app.ui.controllers import ProjectController, TelemetryController
 

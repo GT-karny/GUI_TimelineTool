@@ -9,28 +9,13 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import QPointF
 import pyqtgraph as pg
 
-from ..core.timeline import Timeline, Keyframe, Track
+from ..core.timeline import Timeline
 from ..core.interpolation import evaluate
-from .selection import SelectionManager, KeyPoint, KeyPosProvider
+from .key_edit_service import KeyEditService
+from .selection import SelectionManager, KeyPosProvider
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class KeyDragState:
-    """State container for keyframe drag operations."""
-
-    key_point: Optional[KeyPoint] = None
-    start_tv: tuple[float, float] | None = None
-
-    @property
-    def active(self) -> bool:
-        return self.key_point is not None
-
-    def reset(self) -> None:
-        self.key_point = None
-        self.start_tv = None
 
 
 @dataclass
@@ -70,10 +55,7 @@ class MouseController(QtCore.QObject):
         pos_provider: KeyPosProvider,
         on_changed: Callable[[], None],
         set_playhead: Callable[[float], None],
-        commit_drag: Optional[Callable[[Keyframe, tuple, tuple], None]] = None,
-        # ▼ 追加：右クリック/ダブルクリック用のコールバック
-        add_key_cb: Optional[Callable[[float, float], Optional[Keyframe]]] = None,
-        delete_key_cb: Optional[Callable[[Keyframe], None]] = None,
+        key_edit: KeyEditService,
     ):
         super().__init__()
         self.plot = plot_widget
@@ -85,8 +67,6 @@ class MouseController(QtCore.QObject):
 
         # 状態
         self._left_down = False
-        self._key_drag = KeyDragState()
-
         # 中ボタンパン
         self._mid_panning = False
         self._mid_last_scene: Optional[QPointF] = None
@@ -99,9 +79,7 @@ class MouseController(QtCore.QObject):
         # イベントフック
         self.plot.scene().installEventFilter(self)
 
-        self.commit_drag = commit_drag
-        self.add_key_cb = add_key_cb
-        self.delete_key_cb = delete_key_cb
+        self.key_edit = key_edit
 
     def set_plot_widget(self, plot_widget: pg.PlotWidget) -> None:
         if self.plot is plot_widget:
@@ -120,22 +98,6 @@ class MouseController(QtCore.QObject):
 
     def _scene_to_view(self, p: QPointF) -> QPointF:
         return self.vb.mapSceneToView(p)
-
-    # ---- KeyPoint -> Keyframe 解決（単一トラック前提の簡易版）----
-    def _track_for_id(self, track_id: str) -> Optional[Track]:
-        for track in self.timeline.iter_tracks():
-            if track.track_id == track_id:
-                return track
-        return None
-
-    def _resolve_key(self, kp: KeyPoint) -> Optional[Keyframe]:
-        track = self._track_for_id(kp.track_id)
-        if track is None:
-            return None
-        for k in track.keys:
-            if id(k) == kp.key_id:
-                return k
-        return None
 
     # ============================================================
     # Event filter
@@ -196,7 +158,7 @@ class MouseController(QtCore.QObject):
                 self.sel.add(hit.track_id, hit.key_id)
             else:
                 self.sel.set_single(hit.track_id, hit.key_id)
-            self._begin_key_drag(hit)
+            self.key_edit.begin_drag(hit)
             self.on_changed()
         else:
             if self.sel.selected:
@@ -213,7 +175,8 @@ class MouseController(QtCore.QObject):
 
         if not self._left_down:
             return False
-        if self._update_key_drag(ev.scenePos()):
+        if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+            self.on_changed()
             return True
         self.sel.marquee_update(ev.scenePos())
         self.on_changed()
@@ -223,7 +186,7 @@ class MouseController(QtCore.QObject):
         """Handle left button release by finalising drags or marquee."""
 
         self._left_down = False
-        self._end_key_drag()
+        self.key_edit.commit_drag()
         self.sel.marquee_commit(additive=self._is_shift(ev))
         self.on_changed()
         return True
@@ -234,9 +197,7 @@ class MouseController(QtCore.QObject):
         vp = self._scene_to_view(ev.scenePos())
         t = float(max(0.0, vp.x()))
         v = float(vp.y())
-        kf = self._create_keyframe(t, v)
-        if kf is not None:
-            self.sel.set_single(self.provider.track_id, id(kf))
+        if self.key_edit.add_at(t, v) is not None:
             self.on_changed()
         return True
 
@@ -300,56 +261,6 @@ class MouseController(QtCore.QObject):
         self.vb.scaleBy((s, s), center=center)
         return True
 
-    # ---- Drag helpers ---------------------------------------------------
-    def _begin_key_drag(self, hit: KeyPoint) -> None:
-        """Initialise state for dragging the key represented by ``hit``."""
-
-        self._key_drag.key_point = hit
-        key = self._resolve_key(hit)
-        if key is not None:
-            self._key_drag.start_tv = (key.t, key.v)
-        else:
-            self._key_drag.start_tv = None
-
-    def _update_key_drag(self, scene_pos: QPointF) -> bool:
-        """Update the key drag to follow ``scene_pos`` if active."""
-
-        if not self._key_drag.active:
-            return False
-        key_point = self._key_drag.key_point
-        if key_point is None:
-            return False
-        key = self._resolve_key(key_point)
-        if key is None:
-            return False
-        mp = self._scene_to_view(scene_pos)
-        key.t = float(max(0.0, mp.x()))
-        key.v = float(mp.y())
-        track = self._track_for_id(key_point.track_id)
-        if track is not None:
-            track.clamp_times()
-        self.on_changed()
-        return True
-
-    def _end_key_drag(self) -> bool:
-        """Finalize the current key drag and issue commit callbacks."""
-
-        if not self._key_drag.active:
-            return False
-        key_point = self._key_drag.key_point
-        key = self._resolve_key(key_point) if key_point is not None else None
-        if (
-            key is not None
-            and self.commit_drag is not None
-            and self._key_drag.start_tv is not None
-        ):
-            t0, v0 = self._key_drag.start_tv
-            t1, v1 = key.t, key.v
-            if abs(t0 - t1) > 1e-12 or abs(v0 - v1) > 1e-12:
-                self.commit_drag(key, (t0, v0), (t1, v1))
-        self._key_drag.reset()
-        return True
-
     def _begin_zoom_drag(self, scene_pos: QPointF) -> None:
         """Initialise the right button zoom drag state."""
 
@@ -400,43 +311,14 @@ class MouseController(QtCore.QObject):
         if chosen is act_add:
             vp = self._scene_to_view(ev.scenePos())
             t, v = float(max(0.0, vp.x())), float(vp.y())
-            kf = self._create_keyframe(t, v)
-            if kf is not None:
-                self.sel.set_single(self.provider.track_id, id(kf))
+            if self.key_edit.add_at(t, v) is not None:
                 self.on_changed()
 
         elif chosen is act_del:
             try:
-                hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=9999)
-                if not hit:
-                    return
-                key = self._resolve_key(hit)
-                if not key:
-                    return
-                self._key_drag.reset()
-                self.sel.discard(hit.track_id, hit.key_id)
-                if self.delete_key_cb:
-                    self.delete_key_cb(key)
-                else:
-                    # フォールバック（Undoなし直書き）
-                    track = self._track_for_id(hit.track_id)
-                    if track and key in track.keys:
-                        track.keys.remove(key)
-                self.on_changed()
+                if self.key_edit.delete_at(ev.scenePos(), px_thresh=9999):
+                    self.on_changed()
                 return
             except Exception:
                 logger.exception("Failed to delete keyframe from context menu")
                 return
-
-    def _create_keyframe(self, t: float, v: float) -> Optional[Keyframe]:
-        """Create a keyframe via callback or a fallback implementation."""
-
-        if self.add_key_cb:
-            return self.add_key_cb(t, v)
-        kf = Keyframe(t, v)
-        track = self._track_for_id(str(self.provider.track_id))
-        if track is None:
-            return None
-        track.keys.append(kf)
-        track.clamp_times()
-        return kf

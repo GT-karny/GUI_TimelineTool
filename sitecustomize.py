@@ -30,6 +30,7 @@ def _install_pyside6_stub() -> None:
         return
 
     pyside6 = types.ModuleType("PySide6")
+    pyside6.__path__ = []  # type: ignore[attr-defined]
     qtcore = types.ModuleType("PySide6.QtCore")
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     qtgui = types.ModuleType("PySide6.QtGui")
@@ -143,6 +144,22 @@ def _install_pyside6_stub() -> None:
     class QAction:  # pragma: no cover - trivial stub
         def __init__(self, text: str):
             self.text = text
+
+    class QUndoCommand:  # pragma: no cover - trivial stub
+        def __init__(self, text: str = "", parent: "QUndoCommand | None" = None):
+            self._text = text
+            self._children: list[QUndoCommand] = []
+            if parent is not None:
+                parent._children.append(self)
+
+        def redo(self) -> None:
+            pass
+
+        def undo(self) -> None:
+            pass
+
+        def childCount(self) -> int:
+            return len(self._children)
 
     class QWidget(QObject):  # pragma: no cover - trivial stub
         def __init__(self, parent=None):
@@ -263,6 +280,8 @@ def _install_pyside6_stub() -> None:
 
         def value(self) -> int:
             return self._value
+
+    qtgui.QUndoCommand = QUndoCommand
 
     qtwidgets.QWidget = QWidget
 

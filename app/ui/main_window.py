@@ -19,6 +19,7 @@ from .telemetry_panel import TelemetryPanel
 
 from ..interaction.selection import SelectionManager, SelectedKey
 from ..interaction.pos_provider import SingleTrackPosProvider
+from ..interaction.key_edit_service import KeyEditService
 from ..interaction.mouse_controller import MouseController
 from ..playback.controller import PlaybackController
 from ..playback.telemetry_bridge import TelemetryBridge
@@ -28,7 +29,6 @@ from ..actions.undo_commands import (
     AddKeyCommand,
     AddTrackCommand,
     DeleteKeysCommand,
-    MoveKeyCommand,
     RemoveTrackCommand,
     RenameTrackCommand,
     SetKeyTimeCommand,
@@ -136,6 +136,12 @@ class MainWindow(QtWidgets.QMainWindow):
             track_id=active_row.track.track_id,
         )
         self.sel = SelectionManager(active_row.timeline_plot.plot.scene(), self._pos_provider)
+        self._key_edit = KeyEditService(
+            timeline=self.timeline,
+            selection=self.sel,
+            pos_provider=self._pos_provider,
+            push_undo=self.undo.push,
+        )
         self.mouse = MouseController(
             plot_widget=active_row.timeline_plot.plot,
             timeline=self.timeline,
@@ -143,16 +149,7 @@ class MainWindow(QtWidgets.QMainWindow):
             pos_provider=self._pos_provider,
             on_changed=self._refresh_view,
             set_playhead=self.playback.set_playhead,
-            commit_drag=lambda key, before, after: self.undo.push(
-                MoveKeyCommand(self.timeline, self._pos_provider.track_id, key, before, after)
-            ),
-            # ▼ 追加：右クリック/ダブルクリックの Add/Delete を Undo に積む
-            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(
-                AddKeyCommand(self.timeline, self._pos_provider.track_id, t, v)
-            ),
-            delete_key_cb=lambda key: self.undo.push(
-                DeleteKeysCommand(self.timeline, self._pos_provider.track_id, [key])
-            ),
+            key_edit=self._key_edit,
         )
 
         # --- Track コンテナ操作 ---
