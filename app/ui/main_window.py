@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
@@ -10,9 +9,8 @@ import numpy as np
 
 from ..core.timeline import Timeline, Keyframe, InterpMode, Track
 from ..core.interpolation import evaluate
-from ..io.project_io import save_project, load_project
 from ..services.export_dialog import export_timeline_csv_via_dialog
-from ..services.telemetry_sender import build_track_snapshots, snapshots_to_payload
+from .controllers import ProjectController, TelemetryController
 from .track_container import TrackContainer
 from .track_row import TrackRow
 from .toolbar import TimelineToolbar
@@ -24,7 +22,6 @@ from ..interaction.pos_provider import SingleTrackPosProvider
 from ..interaction.mouse_controller import MouseController
 from ..playback.controller import PlaybackController
 from ..playback.telemetry_bridge import TelemetryBridge
-from ..telemetry.settings import TelemetrySettings
 
 
 from ..actions.undo_commands import (
@@ -52,6 +49,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._init_toolbar()
         self._init_central_widgets()
         self._init_undo_stack()
+        self._init_controllers()
         self._wire_signals()
         self._initialize_view_state()
 
@@ -59,10 +57,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Model ---
         self.timeline = Timeline()
         self.sample_rate_hz: float = 90.0
-        self._current_project_path: Optional[Path] = None
         self._app_settings = QtCore.QSettings("TimelineTool", "TimelineTool")
         self.telemetry_bridge = TelemetryBridge(self._app_settings)
-        self._telemetry_frame_index = 0
         self.playback = PlaybackController(self.timeline, self._app_settings)
 
     def _init_toolbar(self) -> None:
@@ -92,8 +88,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
         self.setStatusBar(QtWidgets.QStatusBar())
 
-        self._build_menu()
-
         # モデル→ビュー注入
         self.track_container.set_timeline(self.timeline)
         self._on_track_rows_changed()
@@ -114,6 +108,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # ついでにUndo/Redoのたびに再描画
         self.undo.indexChanged.connect(self._refresh_view)
         self.undo.indexChanged.connect(self._log_undo_stack_state)
+
+    def _init_controllers(self) -> None:
+        self.project_controller = ProjectController(self)
+        self.telemetry_controller = TelemetryController(
+            playback=self.playback,
+            telemetry_bridge=self.telemetry_bridge,
+            telemetry_panel=self.telemetry_panel,
+            timeline_getter=lambda: self.timeline,
+        )
+        self._build_menu()
 
     def _wire_signals(self) -> None:
         # --- Playback controller ---
@@ -176,7 +180,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
-        self.telemetry_panel.settings_changed.connect(self._on_telemetry_settings_changed)
+        self.telemetry_panel.settings_changed.connect(self.telemetry_controller.on_settings_changed)
 
     def _on_track_rows_changed(self) -> None:
         active = self.track_container.active_row or self.track_container.primary_row
@@ -248,11 +252,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.fit_x()
         self.plotw.fit_y(0.15)
 
-        self._update_window_title()
-        self.telemetry_panel.set_settings(
-            self.telemetry_bridge.settings,
-            session_placeholder=self.telemetry_bridge.assembler.session_id,
-        )
+        self.project_controller.update_window_title()
+        self.telemetry_controller.initialize_panel()
 
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
@@ -359,12 +360,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # -------------------- Playback callbacks --------------------
     def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
         self.plotw.set_playhead(playhead_s)
-        self._publish_telemetry_snapshot(playhead_s, playing, advance_frame=playing)
+        self.telemetry_controller.on_playback_playhead_changed(playhead_s, playing)
 
     def _on_playback_state_changed(self, playing: bool) -> None:
-        if playing:
-            self._telemetry_frame_index = 0
-        self._publish_telemetry_snapshot(self.playback.playhead, playing, advance_frame=False)
+        self.telemetry_controller.on_playback_state_changed(playing)
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
@@ -417,30 +416,6 @@ class MainWindow(QtWidgets.QMainWindow):
             grouped.setdefault(track.track_id, []).append(key)
         return grouped
 
-    def _on_telemetry_settings_changed(self, settings: TelemetrySettings) -> None:
-        self.telemetry_bridge.apply_settings(settings)
-        self.telemetry_panel.set_settings(
-            self.telemetry_bridge.settings,
-            session_placeholder=self.telemetry_bridge.assembler.session_id,
-        )
-
-    def _publish_telemetry_snapshot(self, playhead_s: float, playing: bool, *, advance_frame: bool) -> None:
-        frame_index = self._telemetry_frame_index
-        self._send_telemetry_frame(playing, playhead_s, frame_index)
-        if advance_frame:
-            self._telemetry_frame_index = frame_index + 1
-
-    def _send_telemetry_frame(self, playing: bool, playhead_s: float, frame_index: int) -> None:
-        snapshots = snapshots_to_payload(
-            build_track_snapshots(self.timeline, playhead_s)
-        )
-        self.telemetry_bridge.update_snapshot(
-            playing=playing,
-            playhead_ms=int(playhead_s * 1000),
-            frame_index=frame_index,
-            track_snapshots=snapshots,
-        )
-
     def _log_undo_stack_state(self, _: int) -> None:
         logger.debug(
             "Undo stack changed: index=%d count=%d clean=%s",
@@ -450,7 +425,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.telemetry_bridge.shutdown()
+        self.telemetry_controller.shutdown()
         super().closeEvent(event)
 
     # -------------------- File menu helpers --------------------
@@ -460,123 +435,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_new = menu.addAction("New File")
         self.act_new.setShortcut(QKeySequence.StandardKey.New)
         self.act_new.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_new.triggered.connect(self._on_new_file)
+        self.act_new.triggered.connect(self.project_controller.on_new_file)
 
         self.act_load = menu.addAction("Load File")
         self.act_load.setShortcut(QKeySequence.StandardKey.Open)
         self.act_load.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_load.triggered.connect(self._on_load_file)
+        self.act_load.triggered.connect(self.project_controller.on_load_file)
 
         menu.addSeparator()
 
         self.act_save = menu.addAction("Save File")
         self.act_save.setShortcut(QKeySequence.StandardKey.Save)
         self.act_save.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_save.triggered.connect(self._on_save_file)
+        self.act_save.triggered.connect(self.project_controller.on_save_file)
 
         self.act_save_as = menu.addAction("Save File as name")
         self.act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.act_save_as.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_save_as.triggered.connect(self._on_save_file_as)
+        self.act_save_as.triggered.connect(self.project_controller.on_save_file_as)
 
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
-
-    def _apply_project(self, tl: Timeline, *, sample_rate: Optional[float] = None,
-                       path: Optional[Path] = None) -> None:
-        self.timeline = tl
-        if sample_rate is not None:
-            self.sample_rate_hz = float(sample_rate)
-
-        self.track_container.set_timeline(self.timeline)
-        self.track_container.update_duration(self.timeline.duration_s)
-        self._on_track_rows_changed()
-        self.playback.set_timeline(self.timeline)
-        if hasattr(self, "_pos_provider"):
-            active_row = self.track_container.active_row
-            if active_row is not None:
-                self._pos_provider.set_binding(
-                    active_row.timeline_plot.plot,
-                    active_row.track,
-                    active_row.track.track_id,
-                )
-        self.mouse.timeline = self.timeline
-        self.sel.clear()
-
-        self.undo.clear()
-        self.undo.setClean()
-
-        self.toolbar.set_duration(self.timeline.duration_s)
-        self.toolbar.set_interp(self._current_track().interp.value)
-        self.toolbar.set_rate(self.sample_rate_hz)
-
-        self.playback.set_playhead(0.0)
-        self.plotw.fit_x()
-        self.plotw.fit_y(0.15)
-        self._refresh_view()
-
-        self._current_project_path = path
-        self._update_window_title()
-
-    def _update_window_title(self) -> None:
-        if self._current_project_path is None:
-            suffix = "Untitled"
-        else:
-            suffix = self._current_project_path.name
-        self.setWindowTitle(f"{self._base_title} - {suffix}")
-
-    def _on_new_file(self) -> None:
-        self._apply_project(Timeline(), sample_rate=90.0, path=None)
-        self.statusBar().showMessage("Started new project", 3000)
-
-    def _on_load_file(self) -> None:
-        path_str, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Load Timeline Project",
-            str(self._current_project_path or ""),
-            "Timeline Project (*.json);;All Files (*)",
-        )
-        if not path_str:
-            return
-
-        path = Path(path_str)
-        try:
-            tl, sample_rate = load_project(path)
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Load Failed", f"{exc}")
-            return
-
-        self._apply_project(tl, sample_rate=sample_rate, path=path)
-        self.statusBar().showMessage(f"Loaded project: {path}", 3000)
-
-    def _save_to_path(self, path: Path) -> bool:
-        try:
-            save_project(path, self.timeline, self.sample_rate_hz)
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Save Failed", f"{exc}")
-            return False
-
-        self._current_project_path = path
-        self.undo.setClean()
-        self._update_window_title()
-        self.statusBar().showMessage(f"Saved project: {path}", 3000)
-        return True
-
-    def _on_save_file(self) -> None:
-        if self._current_project_path is None:
-            self._on_save_file_as()
-            return
-        self._save_to_path(self._current_project_path)
-
-    def _on_save_file_as(self) -> None:
-        start_dir = self._current_project_path.parent if self._current_project_path else Path.cwd()
-        default_name = self._current_project_path.name if self._current_project_path else "timeline.json"
-        path_str, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Save Timeline Project",
-            str(start_dir / default_name),
-            "Timeline Project (*.json);;All Files (*)",
-        )
-        if not path_str:
-            return
-        self._save_to_path(Path(path_str))
