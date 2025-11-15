@@ -74,6 +74,7 @@ class WindowStub:
         self.playback = MagicMock()
         self._pos_provider = MagicMock()
         self.mouse = SimpleNamespace(timeline=self.timeline)
+        self._key_edit = SimpleNamespace(timeline=self.timeline)
         self.sel = SimpleNamespace(clear=MagicMock())
         self.undo = MagicMock()
         self.toolbar = MagicMock()
@@ -109,6 +110,7 @@ def test_project_controller_apply_project_updates_window_state():
 
     assert window.timeline is new_timeline
     assert window.sample_rate_hz == 120.0
+    assert window._key_edit.timeline is new_timeline
     window.track_container.set_timeline.assert_called_with(new_timeline)
     window.track_container.update_duration.assert_called_with(new_timeline.duration_s)
     window._on_track_rows_changed.assert_called_once()
