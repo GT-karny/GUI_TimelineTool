@@ -20,6 +20,7 @@ from .controllers import ProjectController, TelemetryController
 from .track_container import TrackContainer
 from .track_row import TrackRow
 from .toolbar import TimelineToolbar
+from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
 from .telemetry_panel import TelemetryPanel
 
@@ -51,6 +52,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._base_title = self.windowTitle()
         self.resize(1400, 780)
 
+        self._pos_provider: Optional[SingleTrackPosProvider] = None
+        self.sel: Optional[SelectionManager] = None
+        self._key_edit: Optional[KeyEditService] = None
+        self.mouse: Optional[MouseController] = None
+        self.plotw: Optional[TimelinePlot] = None
+
         self._init_model_state()
         self._init_toolbar()
         self._init_central_widgets()
@@ -81,7 +88,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.playback.set_timeline(self.timeline)
 
-        if hasattr(self, "_pos_provider"):
+        if self._pos_provider is not None:
             active_row = self.track_container.active_row
             if active_row is not None:
                 self._pos_provider.set_binding(
@@ -90,13 +97,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     active_row.track.track_id,
                 )
 
-        if hasattr(self, "_key_edit"):
+        if self._key_edit is not None:
             self._key_edit.timeline = self.timeline
 
-        if hasattr(self, "mouse"):
+        if self.mouse is not None:
             self.mouse.timeline = self.timeline
 
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.clear()
 
         self.undo.clear()
@@ -178,12 +185,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menu()
 
     def _wire_signals(self) -> None:
-        # --- Playback controller ---
+        self._connect_playback_signals()
+        self._init_selection_services()
+        self._connect_track_container_signals()
+        self._connect_inspector_signals()
+        self._connect_toolbar_signals()
+        self._connect_telemetry_signals()
+
+    def _connect_playback_signals(self) -> None:
         self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
         self.playback.playing_changed.connect(self._on_playback_state_changed)
         self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
-        # --- Selection / Mouse 配線 ---
+    def _init_selection_services(self) -> None:
         active_row = self.track_container.active_row
         if active_row is None:
             raise RuntimeError("TrackContainer did not provide an active row")
@@ -210,17 +224,17 @@ class MainWindow(QtWidgets.QMainWindow):
             key_edit=self._key_edit,
         )
 
-        # --- Track コンテナ操作 ---
+    def _connect_track_container_signals(self) -> None:
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
         self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
-        # Inspector signals -> apply edits
+    def _connect_inspector_signals(self) -> None:
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
 
-        # --- Wire toolbar signals ---
+    def _connect_toolbar_signals(self) -> None:
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
         self.toolbar.sig_duration_changed.connect(self._on_duration_changed)
         self.toolbar.sig_rate_changed.connect(self._on_rate_changed)
@@ -232,10 +246,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_seek_start.connect(self._on_seek_start)
         self.toolbar.sig_play.connect(self._on_play)
         self.toolbar.sig_stop.connect(self._on_stop)
+        if self.plotw is None:
+            raise RuntimeError("Active plot widget not initialized")
+
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
-        self.telemetry_panel.settings_changed.connect(self.telemetry_controller.on_settings_changed)
+    def _connect_telemetry_signals(self) -> None:
+        self.telemetry_panel.settings_changed.connect(
+            self.telemetry_controller.on_settings_changed
+        )
 
     def _on_track_rows_changed(self) -> None:
         active = self.track_container.active_row or self.track_container.primary_row
@@ -243,7 +263,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._sync_active_row(active)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
 
     def _on_request_add_track(self) -> None:
@@ -255,7 +275,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if row is None:
             return
         self._sync_active_row(row)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
             self._refresh_view()
 
@@ -265,14 +285,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plotw.set_duration(self.timeline.duration_s)
         self.plotw.set_playback_controller(self.playback)
 
-        if hasattr(self, "_pos_provider"):
+        if self._pos_provider is not None:
             self._pos_provider.set_binding(self.plotw.plot, row.track, row.track.track_id)
-        if hasattr(self, "sel"):
+        if self.sel is not None:
             self.sel.set_scene(self.plotw.plot.scene())
-        if hasattr(self, "mouse"):
+        if self.mouse is not None:
             self.mouse.set_plot_widget(self.plotw.plot)
-        if hasattr(self, "toolbar"):
-            self.toolbar.set_interp(row.track.interp.value)
+        self.toolbar.set_interp(row.track.interp.value)
 
     def _current_track(self) -> Track:
         row = self.track_container.active_row
@@ -327,8 +346,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for key in list(track.keys):
                 initialize_handle_positions(track, key)
 
-        if hasattr(self, "toolbar"):
-            self.toolbar.set_interp(track.interp.value)
+        self.toolbar.set_interp(track.interp.value)
         self._refresh_view()
 
     def _on_duration_changed(self, seconds: float):
