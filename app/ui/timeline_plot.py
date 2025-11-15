@@ -45,8 +45,10 @@ class TimelinePlot(QtWidgets.QWidget):
         )
         self.plot.addItem(self.handle_lines)
         self.handle_points = pg.ScatterPlotItem(size=8)
+        self.handle_points.setZValue(2)
         self.plot.addItem(self.handle_points)
         self.points = pg.ScatterPlotItem(size=10)
+        self.points.setZValue(1)
         self.plot.addItem(self.points)
 
         self.playhead = pg.InfiniteLine(
