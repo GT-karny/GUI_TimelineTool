@@ -5,8 +5,9 @@ from PySide6 import QtWidgets
 import pyqtgraph as pg
 import numpy as np
 
-from ..core.timeline import Timeline, Keyframe
+from ..core.timeline import Track, Keyframe
 from ..core.interpolation import evaluate
+from ..playback.controller import PlaybackController
 
 
 class TimelinePlot(QtWidgets.QWidget):
@@ -17,11 +18,13 @@ class TimelinePlot(QtWidgets.QWidget):
     - UIイベントや編集ロジックは持たない（別モジュールに委譲）
     """
 
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
 
-        # モデル参照（外部から set_timeline で注入）
-        self.timeline: Optional[Timeline] = None
+        # モデル参照（外部から set_track で注入）
+        self._track: Optional[Track] = None
+        self._duration_s: float = 10.0
+        self._playback: Optional[PlaybackController] = None
 
         # ---- Plot 構築 ----
         self.plot = pg.PlotWidget(background="w")
@@ -48,11 +51,27 @@ class TimelinePlot(QtWidgets.QWidget):
         lay.addWidget(self.plot)
 
     # ---- 基本API ----
-    def set_timeline(self, tl: Timeline) -> None:
-        """使用する Timeline を注入し、初回描画を行う。"""
-        self.timeline = tl
+    def set_track(self, track: Optional[Track]) -> None:
+        """描画対象の Track を注入し、初期描画を行う。"""
+        self._track = track
         self.update_curve()
-        # 初期レンジは呼び出し側で fit_x/y を行うことを想定
+
+    def set_duration(self, duration_s: float) -> None:
+        """トラックの時間範囲を設定する。"""
+        self._duration_s = max(0.001, float(duration_s))
+
+    def set_playback_controller(self, playback: Optional[PlaybackController]) -> None:
+        """プレイバック制御と連動させる。None で切断。"""
+        if self._playback is playback:
+            return
+
+        if self._playback is not None:
+            self._playback.remove_playhead_listener(self._on_playback_playhead)
+
+        self._playback = playback
+
+        if playback is not None:
+            playback.add_playhead_listener(self._on_playback_playhead)
 
     def set_playhead(self, t: float) -> None:
         """プレイヘッド位置を秒で設定。"""
@@ -60,14 +79,14 @@ class TimelinePlot(QtWidgets.QWidget):
 
     def update_curve(self) -> None:
         """曲線（補間結果）を再描画。"""
-        if self.timeline is None:
+        if self._track is None:
             self.curve_item.setData([], [])
             return
 
-        ks = self.timeline.track.sorted()
-        tmax = max(self.timeline.duration_s, max((k.t for k in ks), default=0.0))
+        ks = self._track.sorted()
+        tmax = max(self._duration_s, max((k.t for k in ks), default=0.0))
         dense_t = np.linspace(0.0, max(1e-3, tmax), 1200)
-        dense_v = evaluate(self.timeline.track, dense_t)
+        dense_v = evaluate(self._track, dense_t)
         self.curve_item.setData(dense_t, dense_v)
 
     def update_points(self, keys: Iterable[Keyframe], selected_ids: Set[int]) -> None:
@@ -89,20 +108,20 @@ class TimelinePlot(QtWidgets.QWidget):
     # ---- レンジ制御 ----
     def fit_x(self, padding: float = 0.02) -> None:
         """Xレンジを[0, max(1.0, tmax)]に設定。"""
-        if self.timeline is None:
+        if self._track is None:
             self.viewbox.setXRange(0.0, 1.0, padding=padding)
             return
-        ks = self.timeline.track.sorted()
-        tmax = max(self.timeline.duration_s, max((k.t for k in ks), default=0.0))
+        ks = self._track.sorted()
+        tmax = max(self._duration_s, max((k.t for k in ks), default=0.0))
         self.viewbox.setXRange(0.0, max(1.0, tmax), padding=padding)
 
     def fit_y(self, padding: float = 0.05) -> None:
         """キー点に基づいてYレンジを設定（ゼロ幅/非有限は安全側に調整）。"""
-        if self.timeline is None:
+        if self._track is None:
             self.viewbox.setYRange(-1.0, 1.0, padding=0)
             return
 
-        ks = self.timeline.track.sorted()
+        ks = self._track.sorted()
         if ks:
             vmin = min(k.v for k in ks)
             vmax = max(k.v for k in ks)
@@ -121,3 +140,7 @@ class TimelinePlot(QtWidgets.QWidget):
     @property
     def viewbox(self) -> pg.ViewBox:
         return self.plot.plotItem.vb
+
+    # ---- 内部コールバック ----
+    def _on_playback_playhead(self, playhead_s: float, _playing: bool) -> None:
+        self.set_playhead(playhead_s)

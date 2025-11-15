@@ -2,31 +2,37 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Set, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 from PySide6 import QtWidgets, QtCore
-from PySide6.QtGui import QKeySequence, QUndoStack
+from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
-from ..core.timeline import Timeline, Keyframe, InterpMode
+from ..core.timeline import Timeline, Keyframe, InterpMode, Track
 from ..core.interpolation import evaluate
-from ..io.csv_exporter import export_csv
-from ..io.project_io import save_project, load_project
-from .timeline_plot import TimelinePlot
+from ..services.export_dialog import export_timeline_csv_via_dialog
+from .controllers import ProjectController, TelemetryController
+from .track_container import TrackContainer
+from .track_row import TrackRow
 from .toolbar import TimelineToolbar
 from .inspector import KeyInspector  # ★ 追加
+from .telemetry_panel import TelemetryPanel
 
-from ..interaction.selection import SelectionManager
+from ..interaction.selection import SelectionManager, SelectedKey
 from ..interaction.pos_provider import SingleTrackPosProvider
+from ..interaction.key_edit_service import KeyEditService
 from ..interaction.mouse_controller import MouseController
 from ..playback.controller import PlaybackController
 from ..playback.telemetry_bridge import TelemetryBridge
-from ..telemetry.settings import TelemetrySettings
 
 
 from ..actions.undo_commands import (
-    AddKeyCommand, DeleteKeysCommand, MoveKeyCommand,
-    SetKeyTimeCommand, SetKeyValueCommand
+    AddKeyCommand,
+    AddTrackCommand,
+    DeleteKeysCommand,
+    RemoveTrackCommand,
+    RenameTrackCommand,
+    SetKeyTimeCommand,
+    SetKeyValueCommand,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,28 +45,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self._base_title = self.windowTitle()
         self.resize(1400, 780)
 
+        self._init_model_state()
+        self._init_toolbar()
+        self._init_central_widgets()
+        self._init_undo_stack()
+        self._init_controllers()
+        self._wire_signals()
+        self._initialize_view_state()
+
+    def _init_model_state(self) -> None:
         # --- Model ---
         self.timeline = Timeline()
         self.sample_rate_hz: float = 90.0
-        self._current_project_path: Optional[Path] = None
         self._app_settings = QtCore.QSettings("TimelineTool", "TimelineTool")
         self.telemetry_bridge = TelemetryBridge(self._app_settings)
-        self._telemetry_frame_index = 0
-        self._telemetry_ui_updating = False
+        self.playback = PlaybackController(self.timeline, self._app_settings)
 
+    def _init_toolbar(self) -> None:
         # --- Toolbar ---
         self.toolbar = TimelineToolbar(self.timeline.duration_s, self.sample_rate_hz)
         self.addToolBar(self.toolbar)
 
-        # --- Plot (center) ---
-        self.plotw = TimelinePlot(self)
-
-        # --- Playback controller ---
-        self.playback = PlaybackController(self.timeline, self._app_settings)
-        self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
-        self.playback.playing_changed.connect(self._on_playback_state_changed)
-        self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
-
+    def _init_central_widgets(self) -> None:
         # 中央コンテナ
         central = QtWidgets.QWidget(self)
         vbox = QtWidgets.QVBoxLayout(central)
@@ -69,43 +75,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ★ インスペクタをツールバー下に配置
         self.inspector = KeyInspector()
-        self.telemetry_group = QtWidgets.QGroupBox("Telemetry")
-        telemetry_form = QtWidgets.QFormLayout(self.telemetry_group)
-        telemetry_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.telemetry_panel = TelemetryPanel()
 
-        self.telemetry_enabled = QtWidgets.QCheckBox("Enable UDP telemetry")
-        telemetry_form.addRow(self.telemetry_enabled)
-
-        self.telemetry_ip = QtWidgets.QLineEdit()
-        self.telemetry_ip.setPlaceholderText("127.0.0.1")
-        telemetry_form.addRow("IP", self.telemetry_ip)
-
-        self.telemetry_port = QtWidgets.QSpinBox()
-        self.telemetry_port.setRange(1, 65535)
-        telemetry_form.addRow("Port", self.telemetry_port)
-
-        self.telemetry_rate = QtWidgets.QSpinBox()
-        self.telemetry_rate.setRange(1, 240)
-        telemetry_form.addRow("Rate (Hz)", self.telemetry_rate)
-
-        self.telemetry_session = QtWidgets.QLineEdit()
-        self.telemetry_session.setPlaceholderText("Leave blank for auto")
-        telemetry_form.addRow("Session ID", self.telemetry_session)
-
-        vbox.addWidget(self.telemetry_group)
+        vbox.addWidget(self.telemetry_panel)
         vbox.addWidget(self.inspector)
 
-        # プロットを下に
-        vbox.addWidget(self.plotw)
+        # トラックコンテナ
+        self.track_container = TrackContainer(self.playback, parent=self)
+        self.track_container.rows_changed.connect(self._on_track_rows_changed)
+        vbox.addWidget(self.track_container)
 
         self.setCentralWidget(central)
         self.setStatusBar(QtWidgets.QStatusBar())
 
-        self._build_menu()
-
         # モデル→ビュー注入
-        self.plotw.set_timeline(self.timeline)
+        self.track_container.set_timeline(self.timeline)
+        self._on_track_rows_changed()
 
+    def _init_undo_stack(self) -> None:
         self.undo = QUndoStack(self)
         # 内蔵アクションを作ってメインウィンドウに登録（Ctrl+Z / Ctrl+Y も自動付与）
         self.act_undo = self.undo.createUndoAction(self, "Undo")
@@ -122,34 +109,58 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.indexChanged.connect(self._refresh_view)
         self.undo.indexChanged.connect(self._log_undo_stack_state)
 
+    def _init_controllers(self) -> None:
+        self.project_controller = ProjectController(self)
+        self.telemetry_controller = TelemetryController(
+            playback=self.playback,
+            telemetry_bridge=self.telemetry_bridge,
+            telemetry_panel=self.telemetry_panel,
+            timeline_getter=lambda: self.timeline,
+        )
+        self._build_menu()
+
+    def _wire_signals(self) -> None:
+        # --- Playback controller ---
+        self.playback.playhead_changed.connect(self._on_playback_playhead_changed)
+        self.playback.playing_changed.connect(self._on_playback_state_changed)
+        self.playback.loop_enabled_changed.connect(self.toolbar.set_loop)
 
         # --- Selection / Mouse 配線 ---
-        self._pos_provider = SingleTrackPosProvider(self.plotw.plot, self.timeline.track, track_id=0)
-        self.sel = SelectionManager(self.plotw.plot.scene(), self._pos_provider)
+        active_row = self.track_container.active_row
+        if active_row is None:
+            raise RuntimeError("TrackContainer did not provide an active row")
+
+        self._pos_provider = SingleTrackPosProvider(
+            active_row.timeline_plot.plot,
+            active_row.track,
+            track_id=active_row.track.track_id,
+        )
+        self.sel = SelectionManager(active_row.timeline_plot.plot.scene(), self._pos_provider)
+        self._key_edit = KeyEditService(
+            timeline=self.timeline,
+            selection=self.sel,
+            pos_provider=self._pos_provider,
+            push_undo=self.undo.push,
+        )
         self.mouse = MouseController(
-            plot_widget=self.plotw.plot,
+            plot_widget=active_row.timeline_plot.plot,
             timeline=self.timeline,
             selection=self.sel,
             pos_provider=self._pos_provider,
             on_changed=self._refresh_view,
             set_playhead=self.playback.set_playhead,
-            commit_drag=lambda key, before, after: self.undo.push(
-                MoveKeyCommand(self.timeline, key, before, after)
-            ),
-            # ▼ 追加：右クリック/ダブルクリックの Add/Delete を Undo に積む
-            add_key_cb=lambda t, v: (lambda cmd: (self.undo.push(cmd), cmd.k)[1])(AddKeyCommand(self.timeline, t, v)),
-            delete_key_cb=lambda key: self.undo.push(DeleteKeysCommand(self.timeline, [key])),
+            key_edit=self._key_edit,
         )
 
+        # --- Track コンテナ操作 ---
+        self.track_container.request_add_track.connect(self._on_request_add_track)
+        self.track_container.request_remove_track.connect(self._on_request_remove_track)
+        self.track_container.request_rename_track.connect(self._on_request_rename_track)
+        self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
         # Inspector signals -> apply edits
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
-
-        # --- 初期描画・レンジ ---
-        self._refresh_view()
-        self.plotw.fit_x()
-        self.plotw.fit_y(0.15)
 
         # --- Wire toolbar signals ---
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
@@ -166,11 +177,80 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toolbar.sig_fitx.connect(self.plotw.fit_x)
         self.toolbar.sig_fity.connect(lambda: self.plotw.fit_y(0.05))
 
+        self.telemetry_panel.settings_changed.connect(self.telemetry_controller.on_settings_changed)
 
+    def _on_track_rows_changed(self) -> None:
+        active = self.track_container.active_row or self.track_container.primary_row
+        if active is None:
+            return
 
-        self._update_window_title()
-        self._connect_telemetry_ui()
-        self._sync_telemetry_ui()
+        self._sync_active_row(active)
+        if hasattr(self, "sel"):
+            self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
+
+    def _on_request_add_track(self) -> None:
+        cmd = AddTrackCommand(self.timeline)
+        self.undo.push(cmd)
+        self._refresh_view()
+
+    def _on_active_row_changed(self, row: Optional[TrackRow]) -> None:
+        if row is None:
+            return
+        self._sync_active_row(row)
+        if hasattr(self, "sel"):
+            self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
+            self._refresh_view()
+
+    def _sync_active_row(self, row: TrackRow) -> None:
+        self.plotw = row.timeline_plot
+        self.plotw.set_track(row.track)
+        self.plotw.set_duration(self.timeline.duration_s)
+        self.plotw.set_playback_controller(self.playback)
+
+        if hasattr(self, "_pos_provider"):
+            self._pos_provider.set_binding(self.plotw.plot, row.track, row.track.track_id)
+        if hasattr(self, "sel"):
+            self.sel.set_scene(self.plotw.plot.scene())
+        if hasattr(self, "mouse"):
+            self.mouse.set_plot_widget(self.plotw.plot)
+        if hasattr(self, "toolbar"):
+            self.toolbar.set_interp(row.track.interp.value)
+
+    def _current_track(self) -> Track:
+        row = self.track_container.active_row
+        if row is not None:
+            return row.track
+        return self.timeline.track
+
+    def _on_request_remove_track(self, track_id: str) -> None:
+        cmd = RemoveTrackCommand(self.timeline, track_id)
+        self.undo.push(cmd)
+        self._refresh_view()
+
+    def _on_request_rename_track(self, track_id: str, new_name: str) -> None:
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+
+        old_name = self.track_container.take_pending_rename_old_name(track_id)
+        if old_name is None:
+            old_name = track.name if track.name != new_name else new_name
+
+        if old_name == new_name:
+            return
+
+        cmd = RenameTrackCommand(self.timeline, track_id, new_name, old_name=old_name)
+        self.undo.push(cmd)
+        self._refresh_view()
+
+    def _initialize_view_state(self) -> None:
+        # --- 初期描画・レンジ ---
+        self._refresh_view()
+        self.plotw.fit_x()
+        self.plotw.fit_y(0.15)
+
+        self.project_controller.update_window_title()
+        self.telemetry_controller.initialize_panel()
 
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
@@ -178,7 +258,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
-        self.timeline.track.interp = {
+        track = self._current_track()
+        track.interp = {
             "cubic": InterpMode.CUBIC,
             "linear": InterpMode.LINEAR,
             "step": InterpMode.STEP,
@@ -187,6 +268,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_duration_changed(self, seconds: float):
         self.timeline.set_duration(float(seconds))
+        self.track_container.update_duration(self.timeline.duration_s)
         self.plotw.fit_x()
         self.playback.clamp_to_duration()
         self._refresh_view()
@@ -203,39 +285,45 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
         # 仕様：補間値を初期値に
-        v = float(evaluate(self.timeline.track, np.array([t]))[0])
-        cmd = AddKeyCommand(self.timeline, t, v)
+        track = self._current_track()
+        track_id = track.track_id
+        v = float(evaluate(track, np.array([t]))[0])
+        cmd = AddKeyCommand(self.timeline, track_id, t, v)
         self.undo.push(cmd)
         # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
         kf = cmd.k
         if kf is not None:
-            self.sel.set_single(0, id(kf))
+            self.sel.set_single(track_id, id(kf))
         self._refresh_view()
 
     def _on_delete_selected(self):
-        key_ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        if not key_ids:
+        grouped = self._selected_keys_by_track()
+        if not grouped:
             return
-        targets = [k for k in self.timeline.track.keys if id(k) in key_ids]
-        if not targets:
+
+        root = QUndoCommand("Delete Selected Keys")
+        for track_id, keys in grouped.items():
+            if not keys:
+                continue
+            DeleteKeysCommand(self.timeline, track_id, keys, parent=root)
+
+        if root.childCount() == 0:
             return
-        self.undo.push(DeleteKeysCommand(self.timeline, targets))
+
+        self.undo.push(root)
         self.sel.clear()
         self._refresh_view()
 
     def _on_reset(self):
-        self.timeline.track.keys.clear()
-        self.timeline.track.keys.append(Keyframe(0.0, 0.0))
-        self.timeline.track.keys.append(Keyframe(self.timeline.duration_s, 0.0))
+        track = self._current_track()
+        track.keys.clear()
+        track.keys.append(Keyframe(0.0, 0.0))
+        track.keys.append(Keyframe(self.timeline.duration_s, 0.0))
         self.sel.clear()
         self._refresh_view()
 
     def _on_export_csv(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export CSV", "timeline.csv", "CSV Files (*.csv)")
-        if not path:
-            return
-        export_csv(path, self.timeline, self.sample_rate_hz)
-        QtWidgets.QMessageBox.information(self, "Export", f"Exported to:\n{path}")
+        export_timeline_csv_via_dialog(self, self.timeline, self.sample_rate_hz)
 
     def _on_play(self):
         self.playback.play()
@@ -245,21 +333,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------- Inspector handlers --------------------
     def _on_inspector_time(self, t_new: float):
-        keys = self._selected_keys()
-        if len(keys) != 1:
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
             return
-        k = keys[0]
+        track, k = pairs[0]
         t_new = float(max(0.0, t_new))
         if abs(k.t - t_new) < 1e-12:
             return
-        self.undo.push(SetKeyTimeCommand(self.timeline, k, old_t=k.t, new_t=t_new))
+        self.undo.push(SetKeyTimeCommand(self.timeline, track.track_id, k, old_t=k.t, new_t=t_new))
         self._refresh_view()
 
     def _on_inspector_value(self, v_new: float):
-        keys = self._selected_keys()
-        if len(keys) != 1:
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
             return
-        k = keys[0]
+        _track, k = pairs[0]
         v_new = float(v_new)
         if abs(k.v - v_new) < 1e-12:
             return
@@ -269,87 +357,61 @@ class MainWindow(QtWidgets.QMainWindow):
     # -------------------- Playback callbacks --------------------
     def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
         self.plotw.set_playhead(playhead_s)
-        self._publish_telemetry_snapshot(playhead_s, playing, advance_frame=playing)
+        self.telemetry_controller.on_playback_playhead_changed(playhead_s, playing)
 
     def _on_playback_state_changed(self, playing: bool) -> None:
-        if playing:
-            self._telemetry_frame_index = 0
-        self._publish_telemetry_snapshot(self.playback.playhead, playing, advance_frame=False)
+        self.telemetry_controller.on_playback_state_changed(playing)
 
     # -------------------- View refresh + inspector sync --------------------
     def _refresh_view(self):
-        ks = self.timeline.track.sorted()
-        self.plotw.update_curve()
+        self.track_container.set_timeline(self.timeline)
 
-        selected_key_ids: Set[int] = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        self.plotw.update_points(ks, selected_key_ids)
+        resolved = self._resolved_selection()
+        valid_selected = {SelectedKey(track.track_id, id(key)) for track, key in resolved}
+        if valid_selected != self.sel.selected:
+            self.sel.selected = valid_selected
+            resolved = self._resolved_selection()
 
-        # --- inspector sync ---
-        selected_keys = [k for k in ks if id(k) in selected_key_ids]
-        if len(selected_keys) == 1:
-            k = selected_keys[0]
-            self.inspector.set_single_values(k.t, k.v)
+        selection_map: Dict[str, Set[int]] = {}
+        for track, key in resolved:
+            selection_map.setdefault(track.track_id, set()).add(id(key))
+
+        for row in self.track_container.rows:
+            track = row.track
+            ids = selection_map.get(track.track_id, set())
+            row.timeline_plot.update_points(track.sorted(), ids)
+
+        if len(resolved) == 1:
+            track, key = resolved[0]
+            self.inspector.set_single_values(track.name, key.t, key.v)
         else:
-            self.inspector.set_no_or_multi()
+            names = [track.name for track, _ in resolved]
+            self.inspector.set_no_or_multi(names)
 
     # -------------------- Helpers --------------------
-    def _selected_keys(self) -> List[Keyframe]:
-        ids = {kid for (tid, kid) in self.sel.selected if tid == 0}
-        return [k for k in self.timeline.track.sorted() if id(k) in ids]
+    def _resolved_selection(self) -> List[Tuple[Track, Keyframe]]:
+        track_map = {track.track_id: track for track in self.timeline.iter_tracks()}
+        resolved: List[Tuple[Track, Keyframe]] = []
+        invalid: Set[SelectedKey] = set()
+        for sel in set(self.sel.selected):
+            track = track_map.get(sel.track_id)
+            if track is None:
+                invalid.add(sel)
+                continue
+            key = next((k for k in track.keys if id(k) == sel.key_id), None)
+            if key is None:
+                invalid.add(sel)
+                continue
+            resolved.append((track, key))
+        if invalid:
+            self.sel.selected -= invalid
+        return resolved
 
-    def _connect_telemetry_ui(self) -> None:
-        self.telemetry_enabled.toggled.connect(self._on_telemetry_setting_changed)
-        self.telemetry_ip.editingFinished.connect(self._on_telemetry_setting_changed)
-        self.telemetry_port.valueChanged.connect(self._on_telemetry_setting_changed)
-        self.telemetry_rate.valueChanged.connect(self._on_telemetry_setting_changed)
-        self.telemetry_session.editingFinished.connect(self._on_telemetry_setting_changed)
-
-    def _sync_telemetry_ui(self) -> None:
-        settings = self.telemetry_bridge.settings
-        self._telemetry_ui_updating = True
-        try:
-            self.telemetry_enabled.setChecked(settings.enabled)
-            self.telemetry_ip.setText(settings.ip)
-            self.telemetry_port.setValue(int(settings.port))
-            self.telemetry_rate.setValue(int(settings.rate_hz))
-            session_text = settings.session_id or self.telemetry_bridge.assembler.session_id
-            self.telemetry_session.setText(session_text)
-        finally:
-            self._telemetry_ui_updating = False
-
-    def _current_telemetry_settings(self) -> TelemetrySettings:
-        session_text = self.telemetry_session.text().strip()
-        return TelemetrySettings(
-            enabled=self.telemetry_enabled.isChecked(),
-            ip=self.telemetry_ip.text().strip() or "127.0.0.1",
-            port=int(self.telemetry_port.value()),
-            rate_hz=int(self.telemetry_rate.value()),
-            session_id=session_text or None,
-        )
-
-    def _on_telemetry_setting_changed(self) -> None:
-        if self._telemetry_ui_updating:
-            return
-        settings = self._current_telemetry_settings()
-        self.telemetry_bridge.apply_settings(settings)
-        self._sync_telemetry_ui()
-
-    def _publish_telemetry_snapshot(self, playhead_s: float, playing: bool, *, advance_frame: bool) -> None:
-        frame_index = self._telemetry_frame_index
-        self._send_telemetry_frame(playing, playhead_s, frame_index)
-        if advance_frame:
-            self._telemetry_frame_index = frame_index + 1
-
-    def _send_telemetry_frame(self, playing: bool, playhead_s: float, frame_index: int) -> None:
-        track = self.timeline.track
-        values = evaluate(track, np.array([playhead_s], dtype=float))
-        snapshots = [{"name": track.name, "value": float(values[0])}]
-        self.telemetry_bridge.update_snapshot(
-            playing=playing,
-            playhead_ms=int(playhead_s * 1000),
-            frame_index=frame_index,
-            track_snapshots=snapshots,
-        )
+    def _selected_keys_by_track(self) -> Dict[str, List[Keyframe]]:
+        grouped: Dict[str, List[Keyframe]] = {}
+        for track, key in self._resolved_selection():
+            grouped.setdefault(track.track_id, []).append(key)
+        return grouped
 
     def _log_undo_stack_state(self, _: int) -> None:
         logger.debug(
@@ -360,7 +422,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.telemetry_bridge.shutdown()
+        self.telemetry_controller.shutdown()
         super().closeEvent(event)
 
     # -------------------- File menu helpers --------------------
@@ -370,114 +432,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_new = menu.addAction("New File")
         self.act_new.setShortcut(QKeySequence.StandardKey.New)
         self.act_new.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_new.triggered.connect(self._on_new_file)
+        self.act_new.triggered.connect(self.project_controller.on_new_file)
 
         self.act_load = menu.addAction("Load File")
         self.act_load.setShortcut(QKeySequence.StandardKey.Open)
         self.act_load.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_load.triggered.connect(self._on_load_file)
+        self.act_load.triggered.connect(self.project_controller.on_load_file)
 
         menu.addSeparator()
 
         self.act_save = menu.addAction("Save File")
         self.act_save.setShortcut(QKeySequence.StandardKey.Save)
         self.act_save.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_save.triggered.connect(self._on_save_file)
+        self.act_save.triggered.connect(self.project_controller.on_save_file)
 
         self.act_save_as = menu.addAction("Save File as name")
         self.act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.act_save_as.setShortcutContext(QtCore.Qt.ApplicationShortcut)
-        self.act_save_as.triggered.connect(self._on_save_file_as)
+        self.act_save_as.triggered.connect(self.project_controller.on_save_file_as)
 
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
-
-    def _apply_project(self, tl: Timeline, *, sample_rate: Optional[float] = None,
-                       path: Optional[Path] = None) -> None:
-        self.timeline = tl
-        if sample_rate is not None:
-            self.sample_rate_hz = float(sample_rate)
-
-        self.plotw.set_timeline(self.timeline)
-        self.playback.set_timeline(self.timeline)
-        self._pos_provider.track = self.timeline.track
-        self.mouse.timeline = self.timeline
-        self.sel.clear()
-
-        self.undo.clear()
-        self.undo.setClean()
-
-        self.toolbar.set_duration(self.timeline.duration_s)
-        self.toolbar.set_interp(self.timeline.track.interp.value)
-        self.toolbar.set_rate(self.sample_rate_hz)
-
-        self.playback.set_playhead(0.0)
-        self.plotw.fit_x()
-        self.plotw.fit_y(0.15)
-        self._refresh_view()
-
-        self._current_project_path = path
-        self._update_window_title()
-
-    def _update_window_title(self) -> None:
-        if self._current_project_path is None:
-            suffix = "Untitled"
-        else:
-            suffix = self._current_project_path.name
-        self.setWindowTitle(f"{self._base_title} - {suffix}")
-
-    def _on_new_file(self) -> None:
-        self._apply_project(Timeline(), sample_rate=90.0, path=None)
-        self.statusBar().showMessage("Started new project", 3000)
-
-    def _on_load_file(self) -> None:
-        path_str, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Load Timeline Project",
-            str(self._current_project_path or ""),
-            "Timeline Project (*.json);;All Files (*)",
-        )
-        if not path_str:
-            return
-
-        path = Path(path_str)
-        try:
-            tl, sample_rate = load_project(path)
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Load Failed", f"{exc}")
-            return
-
-        self._apply_project(tl, sample_rate=sample_rate, path=path)
-        self.statusBar().showMessage(f"Loaded project: {path}", 3000)
-
-    def _save_to_path(self, path: Path) -> bool:
-        try:
-            save_project(path, self.timeline, self.sample_rate_hz)
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Save Failed", f"{exc}")
-            return False
-
-        self._current_project_path = path
-        self.undo.setClean()
-        self._update_window_title()
-        self.statusBar().showMessage(f"Saved project: {path}", 3000)
-        return True
-
-    def _on_save_file(self) -> None:
-        if self._current_project_path is None:
-            self._on_save_file_as()
-            return
-        self._save_to_path(self._current_project_path)
-
-    def _on_save_file_as(self) -> None:
-        start_dir = self._current_project_path.parent if self._current_project_path else Path.cwd()
-        default_name = self._current_project_path.name if self._current_project_path else "timeline.json"
-        path_str, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Save Timeline Project",
-            str(start_dir / default_name),
-            "Timeline Project (*.json);;All Files (*)",
-        )
-        if not path_str:
-            return
-        self._save_to_path(Path(path_str))

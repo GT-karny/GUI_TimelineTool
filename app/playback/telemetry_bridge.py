@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Optional, Tuple
+from typing import Optional, Tuple
 
 from PySide6.QtCore import QSettings
 
@@ -17,19 +18,46 @@ from ..telemetry.settings import TelemetrySettings, load_settings, save_settings
 class _TelemetrySnapshot:
     playhead_ms: int
     frame_index: int
-    tracks: Tuple[dict[str, float], ...]
+    tracks: Tuple[dict[str, Tuple[float, ...]], ...]
+
+
+def _to_values(snapshot: Mapping[str, object]) -> Tuple[float, ...]:
+    if "values" in snapshot:
+        raw_values = snapshot.get("values", [])
+    elif "value" in snapshot:
+        raw_values = [snapshot.get("value")]
+    else:
+        raw_values = []
+
+    values: list[float] = []
+    if isinstance(raw_values, Mapping):
+        iterable = raw_values.values()
+    elif isinstance(raw_values, (str, bytes)):
+        iterable = [raw_values]
+    else:
+        try:
+            iterable = list(raw_values)  # type: ignore[arg-type]
+        except TypeError:
+            iterable = [raw_values]
+
+    for value in iterable:
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return tuple(values)
 
 
 def _normalize_track_snapshots(
-    track_snapshots: Iterable[Mapping[str, float]]
-) -> Tuple[dict[str, float], ...]:
+    track_snapshots: Iterable[Mapping[str, object]]
+) -> Tuple[dict[str, Tuple[float, ...]], ...]:
     normalized = []
     for snapshot in track_snapshots:
         name = snapshot.get("name")
         if name is None:
             continue
-        value = snapshot.get("value", 0.0)
-        normalized.append({"name": str(name), "value": float(value)})
+        values = _to_values(snapshot)
+        normalized.append({"name": str(name), "values": values})
     return tuple(normalized)
 
 
@@ -79,7 +107,7 @@ class TelemetryBridge:
         playing: bool,
         playhead_ms: int,
         frame_index: int,
-        track_snapshots: Iterable[Mapping[str, float]],
+        track_snapshots: Iterable[Mapping[str, object]],
     ) -> None:
         """Store the most recent telemetry data for background transmission."""
 

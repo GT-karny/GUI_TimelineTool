@@ -1,7 +1,7 @@
 # interaction/selection.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Iterable, Optional, Set, Protocol, Tuple
+from typing import Dict, Iterable, Optional, Protocol, Set
 from PySide6 import QtWidgets
 from PySide6.QtCore import QPointF, QRectF
 import pyqtgraph as pg
@@ -10,10 +10,18 @@ import pyqtgraph as pg
 # ---- 軽量キー表現（描画/ヒットテスト用の最小情報）----
 @dataclass(frozen=True)
 class KeyPoint:
-    track_id: int
+    track_id: str
     key_id: int       # 安定ID推奨（暫定は id(key_obj) でも可）
     t: float
     v: float
+
+
+@dataclass(frozen=True)
+class SelectedKey:
+    """選択されたキーを識別する (track_id, key_id) の構造体。"""
+
+    track_id: str
+    key_id: int
 
 
 # ---- 座標提供インタフェース（トラック種類を知らないため）----
@@ -37,7 +45,7 @@ class SelectionManager:
         self._scene = scene
         self._provider = provider
 
-        self.selected: Set[Tuple[int, int]] = set()  # {(track_id, key_id)}
+        self.selected: Set[SelectedKey] = set()
         self._marquee_rect_item: Optional[QtWidgets.QGraphicsRectItem] = None
         self._marquee_active = False
         self._marquee_start_scene: Optional[QPointF] = None
@@ -46,21 +54,48 @@ class SelectionManager:
     def clear(self) -> None:
         self.selected.clear()
 
-    def set_single(self, track_id: int, key_id: int) -> None:
-        self.selected = {(track_id, key_id)}
+    def set_single(self, track_id: str, key_id: int) -> None:
+        self.selected = {SelectedKey(str(track_id), int(key_id))}
 
-    def add(self, track_id: int, key_id: int) -> None:
-        self.selected.add((track_id, key_id))
+    def add(self, track_id: str, key_id: int) -> None:
+        self.selected.add(SelectedKey(str(track_id), int(key_id)))
 
-    def discard(self, track_id: int, key_id: int) -> None:
-        self.selected.discard((track_id, key_id))
+    def discard(self, track_id: str, key_id: int) -> None:
+        self.selected.discard(SelectedKey(str(track_id), int(key_id)))
 
-    def toggle(self, track_id: int, key_id: int) -> None:
-        k = (track_id, key_id)
+    def toggle(self, track_id: str, key_id: int) -> None:
+        k = SelectedKey(str(track_id), int(key_id))
         if k in self.selected:
             self.selected.remove(k)
         else:
             self.selected.add(k)
+
+    def retain_tracks(self, valid_track_ids: Iterable[str]) -> None:
+        """存在しないトラックに紐づく選択を破棄する。"""
+
+        valid = {str(tid) for tid in valid_track_ids}
+        self.selected = {sel for sel in self.selected if sel.track_id in valid}
+
+    def set_scene(self, scene: QtWidgets.QGraphicsScene) -> None:
+        if self._scene is scene:
+            return
+        if self._marquee_rect_item is not None:
+            try:
+                self._scene.removeItem(self._marquee_rect_item)
+            except Exception:
+                pass
+            self._marquee_rect_item = None
+        self._marquee_active = False
+        self._marquee_start_scene = None
+        self._scene = scene
+
+    def grouped_by_track(self) -> Dict[str, Set[int]]:
+        """track_id -> {key_id} の辞書を返す。"""
+
+        grouped: Dict[str, Set[int]] = {}
+        for sel in self.selected:
+            grouped.setdefault(sel.track_id, set()).add(sel.key_id)
+        return grouped
 
     # ---- ヒットテスト（最短距離・ピクセル閾値）----
     def hit_test_nearest(self, scene_pos: QPointF, px_thresh: int = 10) -> Optional[KeyPoint]:
@@ -100,11 +135,11 @@ class SelectionManager:
             return
         rect = self._marquee_rect_item.rect()
 
-        newly: Set[Tuple[int, int]] = set()
+        newly: Set[SelectedKey] = set()
         for kp in self._provider.iter_all_keypoints():
             sp = self._provider.scene_pos_of(kp)
             if rect.contains(sp):
-                newly.add((kp.track_id, kp.key_id))
+                newly.add(SelectedKey(kp.track_id, kp.key_id))
 
         if additive:
             self.selected |= newly
