@@ -33,6 +33,7 @@ from ..actions.undo_commands import (
     DeleteKeysCommand,
     MoveKeyCommand,
     RemoveTrackCommand,
+    RenameTrackCommand,
     SetKeyTimeCommand,
     SetKeyValueCommand,
 )
@@ -153,6 +154,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Track コンテナ操作 ---
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
+        self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
         # Inspector signals -> apply edits
@@ -221,6 +223,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_request_remove_track(self, track_id: str) -> None:
         cmd = RemoveTrackCommand(self.timeline, track_id)
+        self.undo.push(cmd)
+        self._refresh_view()
+
+    def _on_request_rename_track(self, track_id: str, new_name: str) -> None:
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+
+        old_name = self.track_container.take_pending_rename_old_name(track_id)
+        if old_name is None:
+            old_name = track.name if track.name != new_name else new_name
+
+        if old_name == new_name:
+            return
+
+        cmd = RenameTrackCommand(self.timeline, track_id, new_name, old_name=old_name)
         self.undo.push(cmd)
         self._refresh_view()
 
