@@ -232,9 +232,10 @@ class Track:
     interp: InterpMode = InterpMode.CUBIC
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
+    _init_handles: bool = field(default=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.interp != InterpMode.BEZIER:
+        if not self._init_handles or self.interp != InterpMode.BEZIER:
             return
 
         for key in list(self.keys):

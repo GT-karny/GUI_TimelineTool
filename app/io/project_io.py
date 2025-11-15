@@ -90,6 +90,7 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
             interp=interp,
             keys=keys,
             track_id=track_obj.get("id"),
+            _init_handles=False,
         )
         track.clamp_times()
         tracks.append(track)

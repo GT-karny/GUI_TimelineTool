@@ -61,6 +61,7 @@ def _apply_snapshot(dest: Timeline, snap: _TimelineSnapshot) -> None:
                 interp=InterpMode(track_snap.interp),
                 keys=_clone_keyframes(track_snap.keys),
                 track_id=track_snap.track_id,
+                _init_handles=False,
             )
         else:
             source.name = track_snap.name
