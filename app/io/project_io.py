@@ -1,14 +1,45 @@
 import json
+from dataclasses import fields
 from pathlib import Path
 from typing import Iterable, List
 
 from ..core.timeline import Timeline, Track, Keyframe, InterpMode, Handle
 
 
+_HANDLE_FIELD_NAMES = tuple(f.name for f in fields(Handle))
+
+
 def _serialize_handle(handle: Handle | None) -> dict | None:
     if handle is None:
         return None
-    return {"t": handle.t, "v": handle.v}
+    return {name: getattr(handle, name) for name in _HANDLE_FIELD_NAMES}
+
+
+def _deserialize_handle(data, *, default_t: float, default_v: float) -> Handle | None:
+    if data is None:
+        return None
+    if isinstance(data, Handle):
+        return data.copy()
+    if isinstance(data, dict):
+        return Handle.from_mapping(data, default_t=default_t, default_v=default_v)
+    if isinstance(data, (list, tuple)) and len(data) == 2:
+        return Handle(float(data[0]), float(data[1]))
+    return None
+
+
+def _coerce_key_payload(key_payload: dict) -> dict:
+    payload = dict(key_payload)
+    default_t = float(payload.get("t", 0.0))
+    default_v = float(payload.get("v", 0.0))
+    if "handle_in" in payload:
+        payload["handle_in"] = _deserialize_handle(
+            payload.get("handle_in"), default_t=default_t, default_v=default_v
+        )
+    if "handle_out" in payload:
+        payload["handle_out"] = _deserialize_handle(
+            payload.get("handle_out"), default_t=default_t, default_v=default_v
+        )
+    return payload
 
 
 def _serialize_track(track: Track) -> dict:
@@ -51,7 +82,7 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
             interp = InterpMode(interp_raw)
         except ValueError:
             interp = InterpMode.CUBIC
-        keys = [Keyframe(**kv) for kv in track_obj.get("keys", [])]
+        keys = [Keyframe(**_coerce_key_payload(kv)) for kv in track_obj.get("keys", [])]
         if not keys:
             keys = [Keyframe(0.0, 0.0)]
         track = Track(
