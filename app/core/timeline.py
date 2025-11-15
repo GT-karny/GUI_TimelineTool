@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Mapping, Sequence, Tuple, Any
 from uuid import uuid4
 
 class InterpMode(str, Enum):
@@ -19,7 +19,22 @@ class Handle:
     v: float
 
     def copy(self) -> "Handle":
-        return Handle(self.t, self.v)
+        return replace(self)
+
+    @classmethod
+    def from_mapping(
+        cls, mapping: Mapping[str, Any], *, default_t: float, default_v: float
+    ) -> "Handle":
+        data = {}
+        for fld in fields(cls):
+            if fld.name in mapping:
+                data[fld.name] = mapping[fld.name]
+        data.setdefault("t", default_t)
+        data.setdefault("v", default_v)
+        result = cls(**data)
+        result.t = float(result.t)
+        result.v = float(result.v)
+        return result
 
     def shift_time(self, dt: float) -> None:
         self.t = float(self.t + dt)
@@ -42,14 +57,22 @@ class Keyframe:
         self.handle_out = self._coerce_handle(self.handle_out)
 
     def _coerce_handle(
-        self, handle: Handle | Sequence[float] | Tuple[float, float] | None
+        self,
+        handle: Handle
+        | Mapping[str, Any]
+        | Sequence[float]
+        | Tuple[float, float]
+        | None,
     ) -> Handle:
         if handle is None:
             return Handle(self.t, self.v)
         if isinstance(handle, Handle):
             return handle.copy()
         if isinstance(handle, dict):
-            return Handle(float(handle.get("t", self.t)), float(handle.get("v", self.v)))
+            coerced = Handle.from_mapping(handle, default_t=self.t, default_v=self.v)
+            coerced.t = float(coerced.t)
+            coerced.v = float(coerced.v)
+            return coerced
         if isinstance(handle, Sequence):
             if len(handle) != 2:
                 raise ValueError("Handle sequences must contain two items (t, v).")

@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF
 from PySide6.QtGui import QUndoCommand
 
 from ..actions.undo_commands import AddKeyCommand, DeleteKeysCommand, MoveKeyCommand
-from ..core.timeline import Keyframe, Timeline, Track
+from ..core.timeline import Handle, Keyframe, Timeline, Track
 from .selection import KeyPoint, KeyPosProvider, SelectionManager
 
 
@@ -197,7 +197,14 @@ class KeyEditService:
         track = self._track_for_id(track_id)
         if track is None:
             return None
-        key = Keyframe(float(time), float(value))
+        t = float(time)
+        v = float(value)
+        key = Keyframe(
+            t,
+            v,
+            handle_in=Handle(t, v),
+            handle_out=Handle(t, v),
+        )
         track.keys.append(key)
         track.clamp_times()
         return key

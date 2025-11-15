@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List
 
 from .timeline import Timeline, Keyframe, Track, InterpMode
@@ -27,8 +27,8 @@ def _clone_keyframes(keys: List[Keyframe]) -> List[Keyframe]:
             Keyframe(
                 k.t,
                 k.v,
-                handle_in=k.handle_in.copy() if k.handle_in is not None else None,
-                handle_out=k.handle_out.copy() if k.handle_out is not None else None,
+                handle_in=replace(k.handle_in) if k.handle_in is not None else None,
+                handle_out=replace(k.handle_out) if k.handle_out is not None else None,
             )
         )
     return cloned
