@@ -52,6 +52,9 @@ class ProjectController:
                     active_row.track.track_id,
                 )
 
+        if hasattr(window, "_key_edit"):
+            window._key_edit.timeline = window.timeline
+
         window.mouse.timeline = window.timeline
         window.sel.clear()
 

@@ -1,0 +1,203 @@
+"""Keyframe editing service coordinating undo-aware operations."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QUndoCommand
+
+from ..actions.undo_commands import AddKeyCommand, DeleteKeysCommand, MoveKeyCommand
+from ..core.timeline import Keyframe, Timeline, Track
+from .selection import KeyPoint, KeyPosProvider, SelectionManager
+
+
+logger = logging.getLogger(__name__)
+
+
+UndoPusher = Callable[[QUndoCommand], None]
+SceneToView = Callable[[QPointF], QPointF]
+
+
+@dataclass
+class _DragState:
+    key_point: Optional[KeyPoint] = None
+    start_tv: tuple[float, float] | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.key_point is not None
+
+    def reset(self) -> None:
+        self.key_point = None
+        self.start_tv = None
+
+
+class KeyEditService:
+    """Owns keyframe add/move/delete operations with undo integration."""
+
+    def __init__(
+        self,
+        timeline: Timeline,
+        selection: SelectionManager,
+        pos_provider: KeyPosProvider,
+        *,
+        push_undo: Optional[UndoPusher] = None,
+    ) -> None:
+        self.timeline = timeline
+        self.selection = selection
+        self.provider = pos_provider
+        self._push_undo = push_undo
+        self._drag = _DragState()
+
+    # ------------------------------------------------------------------
+    # Drag lifecycle
+    # ------------------------------------------------------------------
+    def begin_drag(self, hit: KeyPoint) -> None:
+        """Begin dragging ``hit`` and cache its initial coordinates."""
+
+        self._drag.key_point = hit
+        key = self._resolve_key(hit)
+        if key is not None:
+            self._drag.start_tv = (key.t, key.v)
+        else:
+            self._drag.start_tv = None
+
+    def update_drag(self, scene_pos: QPointF, scene_to_view: SceneToView) -> bool:
+        """Update the active drag to ``scene_pos``."""
+
+        if not self._drag.active:
+            return False
+        key_point = self._drag.key_point
+        if key_point is None:
+            return False
+        key = self._resolve_key(key_point)
+        if key is None:
+            return False
+
+        mp = scene_to_view(scene_pos)
+        key.t = float(max(0.0, mp.x()))
+        key.v = float(mp.y())
+
+        track = self._track_for_id(key_point.track_id)
+        if track is not None:
+            track.clamp_times()
+        return True
+
+    def commit_drag(self) -> bool:
+        """Finish the drag, pushing an undo command when appropriate."""
+
+        if not self._drag.active:
+            return False
+
+        key_point = self._drag.key_point
+        key = self._resolve_key(key_point) if key_point is not None else None
+        if (
+            key is not None
+            and self._drag.start_tv is not None
+            and self._push_undo is not None
+        ):
+            t0, v0 = self._drag.start_tv
+            t1, v1 = key.t, key.v
+            if abs(t0 - t1) > 1e-12 or abs(v0 - v1) > 1e-12:
+                cmd = MoveKeyCommand(
+                    self.timeline, key_point.track_id, key, (t0, v0), (t1, v1)
+                )
+                try:
+                    self._push_undo(cmd)
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("Failed to push MoveKeyCommand to undo stack")
+
+        self._drag.reset()
+        return True
+
+    # ------------------------------------------------------------------
+    # Add / delete helpers
+    # ------------------------------------------------------------------
+    def add_at(self, time: float, value: float) -> Optional[Keyframe]:
+        """Add a keyframe at ``time``/``value`` and select it."""
+
+        track_id = self._active_track_id()
+        key: Optional[Keyframe] = None
+
+        if self._push_undo is not None and track_id is not None:
+            cmd = AddKeyCommand(self.timeline, track_id, time, value)
+            try:
+                self._push_undo(cmd)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("Failed to push AddKeyCommand to undo stack")
+            key = cmd.k
+        else:
+            key = self._create_keyframe_fallback(time, value, track_id)
+
+        if key is not None and track_id is not None:
+            self.selection.set_single(track_id, id(key))
+        return key
+
+    def delete_at(self, scene_pos: QPointF, *, px_thresh: int = 10) -> bool:
+        """Delete the nearest keyframe to ``scene_pos`` if within ``px_thresh``."""
+
+        hit = self.selection.hit_test_nearest(scene_pos, px_thresh=px_thresh)
+        if not hit:
+            return False
+        key = self._resolve_key(hit)
+        if key is None:
+            return False
+
+        self._drag.reset()
+        self.selection.discard(hit.track_id, hit.key_id)
+
+        if self._push_undo is not None:
+            cmd = DeleteKeysCommand(self.timeline, hit.track_id, [key])
+            try:
+                self._push_undo(cmd)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("Failed to push DeleteKeysCommand to undo stack")
+        else:
+            track = self._track_for_id(hit.track_id)
+            if track is not None and key in track.keys:
+                track.keys.remove(key)
+
+        return True
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+    def _active_track_id(self) -> Optional[str]:
+        track_id = getattr(self.provider, "track_id", None)
+        if track_id is None:
+            return None
+        return str(track_id)
+
+    def _track_for_id(self, track_id: str) -> Optional[Track]:
+        for track in self.timeline.iter_tracks():
+            if track.track_id == track_id:
+                return track
+        return None
+
+    def _resolve_key(self, kp: KeyPoint | None) -> Optional[Keyframe]:
+        if kp is None:
+            return None
+        track = self._track_for_id(kp.track_id)
+        if track is None:
+            return None
+        for key in track.keys:
+            if id(key) == kp.key_id:
+                return key
+        return None
+
+    def _create_keyframe_fallback(
+        self, time: float, value: float, track_id: Optional[str]
+    ) -> Optional[Keyframe]:
+        if track_id is None:
+            return None
+        track = self._track_for_id(track_id)
+        if track is None:
+            return None
+        key = Keyframe(float(time), float(value))
+        track.keys.append(key)
+        track.clamp_times()
+        return key
+
