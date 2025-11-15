@@ -233,6 +233,13 @@ class Track:
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
 
+    def __post_init__(self) -> None:
+        if self.interp != InterpMode.BEZIER:
+            return
+
+        for key in list(self.keys):
+            initialize_handle_positions(self, key)
+
     def sorted(self) -> List[Keyframe]:
         return sorted(self.keys, key=lambda k: (k.t, k.v))
 
