@@ -1,13 +1,14 @@
 # ui/timeline_plot.py
 from __future__ import annotations
-from typing import Optional, Iterable, Set
+from typing import Optional, Set
 from PySide6 import QtWidgets
 import pyqtgraph as pg
 import numpy as np
 
-from ..core.timeline import Track, Keyframe
+from ..core.timeline import Track, Keyframe, InterpMode
 from ..core.interpolation import evaluate
 from ..playback.controller import PlaybackController
+from ..interaction.selection import SelectedKey
 
 
 class TimelinePlot(QtWidgets.QWidget):
@@ -37,6 +38,14 @@ class TimelinePlot(QtWidgets.QWidget):
 
         # 曲線・点・プレイヘッド
         self.curve_item = self.plot.plot([], [], pen=pg.mkPen(0, 0, 0, 220, width=2))
+        self.handle_lines = pg.PlotDataItem(
+            [],
+            [],
+            pen=pg.mkPen(100, 100, 100, 150, width=1),
+        )
+        self.plot.addItem(self.handle_lines)
+        self.handle_points = pg.ScatterPlotItem(size=8)
+        self.plot.addItem(self.handle_points)
         self.points = pg.ScatterPlotItem(size=10)
         self.plot.addItem(self.points)
 
@@ -55,6 +64,7 @@ class TimelinePlot(QtWidgets.QWidget):
         """描画対象の Track を注入し、初期描画を行う。"""
         self._track = track
         self.update_curve()
+        self.update_points()
 
     def set_duration(self, duration_s: float) -> None:
         """トラックの時間範囲を設定する。"""
@@ -89,21 +99,82 @@ class TimelinePlot(QtWidgets.QWidget):
         dense_v = evaluate(self._track, dense_t)
         self.curve_item.setData(dense_t, dense_v)
 
-    def update_points(self, keys: Iterable[Keyframe], selected_ids: Set[int]) -> None:
-        """キー点を再描画。選択点は強調表示。"""
-        spots = []
+    def update_points(self, selected: Set[SelectedKey] | None = None) -> None:
+        """キー点およびハンドルを再描画。選択点は強調表示。"""
+
+        if selected is None:
+            selected = set()
+
+        if self._track is None:
+            self.points.setData([])
+            self.handle_points.setData([])
+            self.handle_lines.setData([], [])
+            return
+
+        keys = self._track.sorted()
+        selected_key_ids = {sel.item_id for sel in selected if sel.component == "key"}
+        selected_handle_ids = {
+            sel.item_id
+            for sel in selected
+            if sel.component != "key" and sel.item_id is not None
+        }
+
+        key_spots = []
         for k in keys:
-            is_sel = (id(k) in selected_ids)
-            spots.append(
+            key_id = id(k)
+            is_sel = key_id in selected_key_ids
+            key_spots.append(
                 {
                     "pos": (k.t, k.v),
-                    "data": id(k),  # unique id（ヒットテスト側が使うなら参照）
-                    "brush": pg.mkBrush(255, 160, 0, 220) if is_sel else pg.mkBrush(40, 120, 255, 180),
+                    "data": key_id,
+                    "brush": pg.mkBrush(255, 160, 0, 220)
+                    if is_sel
+                    else pg.mkBrush(40, 120, 255, 180),
                     "size": 12 if is_sel else 10,
-                    "pen": pg.mkPen(180, 100, 0, 220) if is_sel else pg.mkPen(0, 60, 160, 200),
+                    "pen": pg.mkPen(180, 100, 0, 220)
+                    if is_sel
+                    else pg.mkPen(0, 60, 160, 200),
                 }
             )
-        self.points.setData(spots)
+        self.points.setData(key_spots)
+
+        if getattr(self._track, "interp", None) == InterpMode.BEZIER:
+            handle_spots = []
+            line_x: list[float] = []
+            line_y: list[float] = []
+            for k in keys:
+                key_id = id(k)
+                for component, handle in (
+                    ("handle_in", getattr(k, "handle_in", None)),
+                    ("handle_out", getattr(k, "handle_out", None)),
+                ):
+                    if handle is None:
+                        continue
+                    handle_id = id(handle)
+                    is_handle_sel = handle_id in selected_handle_ids
+                    handle_spots.append(
+                        {
+                            "pos": (handle.t, handle.v),
+                            "data": (component, key_id, handle_id),
+                            "brush": pg.mkBrush(255, 200, 80, 220)
+                            if is_handle_sel
+                            else pg.mkBrush(90, 90, 90, 200),
+                            "size": 11 if is_handle_sel else 8,
+                            "pen": pg.mkPen(200, 140, 40, 220)
+                            if is_handle_sel
+                            else pg.mkPen(70, 70, 70, 200),
+                        }
+                    )
+                    line_x.extend([k.t, handle.t, float("nan")])
+                    line_y.extend([k.v, handle.v, float("nan")])
+            self.handle_points.setData(handle_spots)
+            if line_x and line_y:
+                self.handle_lines.setData(line_x, line_y)
+            else:
+                self.handle_lines.setData([], [])
+        else:
+            self.handle_points.setData([])
+            self.handle_lines.setData([], [])
 
     # ---- レンジ制御 ----
     def fit_x(self, padding: float = 0.02) -> None:

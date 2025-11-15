@@ -259,12 +259,13 @@ class MainWindow(QtWidgets.QMainWindow):
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
         track = self._current_track()
-        track.interp = {
-            "cubic": InterpMode.CUBIC,
-            "linear": InterpMode.LINEAR,
-            "step": InterpMode.STEP,
-            "bezier": InterpMode.BEZIER,
-        }[name]
+        try:
+            track.interp = InterpMode(name)
+        except ValueError:
+            logger.warning("Unknown interpolation mode requested: %s", name)
+            return
+        if hasattr(self, "toolbar"):
+            self.toolbar.set_interp(track.interp.value)
         self._refresh_view()
 
     def _on_duration_changed(self, seconds: float):
@@ -369,18 +370,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         resolved = self._resolved_selection()
         valid_selected = {SelectedKey(track.track_id, id(key)) for track, key in resolved}
-        if valid_selected != self.sel.selected:
-            self.sel.selected = valid_selected
+        current_key_selected = {sel for sel in self.sel.selected if sel.is_key}
+        if valid_selected != current_key_selected:
+            others = {sel for sel in self.sel.selected if not sel.is_key}
+            self.sel.selected = valid_selected | others
             resolved = self._resolved_selection()
 
-        selection_map: Dict[str, Set[int]] = {}
-        for track, key in resolved:
-            selection_map.setdefault(track.track_id, set()).add(id(key))
+        selection_map: Dict[str, Set[SelectedKey]] = {}
+        for sel in self.sel.selected:
+            selection_map.setdefault(sel.track_id, set()).add(sel)
 
         for row in self.track_container.rows:
             track = row.track
-            ids = selection_map.get(track.track_id, set())
-            row.timeline_plot.update_points(track.sorted(), ids)
+            selected = selection_map.get(track.track_id, set())
+            row.timeline_plot.update_points(selected)
 
         if len(resolved) == 1:
             track, key = resolved[0]
@@ -398,6 +401,19 @@ class MainWindow(QtWidgets.QMainWindow):
             track = track_map.get(sel.track_id)
             if track is None:
                 invalid.add(sel)
+                continue
+            if not sel.is_key:
+                key = next((k for k in track.keys if id(k) == sel.key_id), None)
+                if key is None:
+                    invalid.add(sel)
+                    continue
+                handle = None
+                if sel.component == "handle_in":
+                    handle = key.handle_in
+                elif sel.component == "handle_out":
+                    handle = key.handle_out
+                if handle is None or id(handle) != sel.item_id:
+                    invalid.add(sel)
                 continue
             key = next((k for k in track.keys if id(k) == sel.key_id), None)
             if key is None:

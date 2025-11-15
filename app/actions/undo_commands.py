@@ -139,6 +139,41 @@ class MoveKeyCommand(QUndoCommand, _ClampMixin):
         self._apply(self.bt, self.bv)
 
 
+class MoveHandleCommand(QUndoCommand):
+    def __init__(
+        self,
+        tl: Timeline,
+        track_id: str,
+        key: Keyframe,
+        handle_attr: str,
+        before: Tuple[float, float],
+        after: Tuple[float, float],
+        label: str = "Move Handle",
+        parent: Optional[QUndoCommand] = None,
+    ) -> None:
+        super().__init__(label, parent)
+        self.tl = tl
+        self.track_id = str(track_id)
+        self.key = key
+        self._handle_attr = str(handle_attr)
+        self.bt, self.bv = before
+        self.at, self.av = after
+
+    def _apply(self, t: float, v: float) -> None:
+        handle = getattr(self.key, self._handle_attr, None)
+        if handle is None:
+            handle = Handle(self.key.t, self.key.v)
+            setattr(self.key, self._handle_attr, handle)
+        handle.t = float(t)
+        handle.v = float(v)
+
+    def redo(self) -> None:
+        self._apply(self.at, self.av)
+
+    def undo(self) -> None:
+        self._apply(self.bt, self.bv)
+
+
 class SetKeyTimeCommand(QUndoCommand, _ClampMixin):
     def __init__(self, tl: Timeline, track_id: str, key: Keyframe,
                  old_t: float, new_t: float, label: str = "Set Time",
