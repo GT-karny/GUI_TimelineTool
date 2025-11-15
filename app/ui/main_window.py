@@ -263,6 +263,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "cubic": InterpMode.CUBIC,
             "linear": InterpMode.LINEAR,
             "step": InterpMode.STEP,
+            "bezier": InterpMode.BEZIER,
         }[name]
         self._refresh_view()
 

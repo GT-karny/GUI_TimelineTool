@@ -43,4 +43,6 @@ def evaluate(track: Track, t_eval: np.ndarray) -> np.ndarray:
         return eval_linear(track, t_eval)
     if track.interp == InterpMode.STEP:
         return eval_step(track, t_eval)
+    if track.interp == InterpMode.BEZIER:
+        return eval_cubic(track, t_eval)
     return eval_cubic(track, t_eval)

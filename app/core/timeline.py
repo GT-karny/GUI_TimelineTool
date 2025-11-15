@@ -2,18 +2,89 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Sequence, Tuple
 from uuid import uuid4
 
 class InterpMode(str, Enum):
     LINEAR = "linear"
     CUBIC  = "cubic"
     STEP   = "step"
+    BEZIER = "bezier"
+
+@dataclass
+class Handle:
+    """Metadata describing a Bezier handle/control point."""
+
+    t: float
+    v: float
+
+    def copy(self) -> "Handle":
+        return Handle(self.t, self.v)
+
+    def shift_time(self, dt: float) -> None:
+        self.t = float(self.t + dt)
+
+    def shift_value(self, dv: float) -> None:
+        self.v = float(self.v + dv)
+
 
 @dataclass
 class Keyframe:
     t: float
     v: float
+    handle_in: Handle | None = None
+    handle_out: Handle | None = None
+
+    def __post_init__(self) -> None:
+        self.t = float(self.t)
+        self.v = float(self.v)
+        self.handle_in = self._coerce_handle(self.handle_in)
+        self.handle_out = self._coerce_handle(self.handle_out)
+
+    def _coerce_handle(
+        self, handle: Handle | Sequence[float] | Tuple[float, float] | None
+    ) -> Handle:
+        if handle is None:
+            return Handle(self.t, self.v)
+        if isinstance(handle, Handle):
+            return handle.copy()
+        if isinstance(handle, dict):
+            return Handle(float(handle.get("t", self.t)), float(handle.get("v", self.v)))
+        if isinstance(handle, Sequence):
+            if len(handle) != 2:
+                raise ValueError("Handle sequences must contain two items (t, v).")
+            return Handle(float(handle[0]), float(handle[1]))
+        raise TypeError("Unsupported handle data")
+
+    def set_time(self, new_t: float) -> None:
+        new_t = float(new_t)
+        dt = new_t - self.t
+        if abs(dt) < 1e-15:
+            self.t = new_t
+            return
+        self.t = new_t
+        if self.handle_in is not None:
+            self.handle_in.shift_time(dt)
+        if self.handle_out is not None:
+            self.handle_out.shift_time(dt)
+
+    def set_value(self, new_v: float) -> None:
+        new_v = float(new_v)
+        dv = new_v - self.v
+        if abs(dv) < 1e-15:
+            self.v = new_v
+            return
+        self.v = new_v
+        if self.handle_in is not None:
+            self.handle_in.shift_value(dv)
+        if self.handle_out is not None:
+            self.handle_out.shift_value(dv)
+
+    def translate(self, dt: float = 0.0, dv: float = 0.0) -> None:
+        if dt:
+            self.set_time(self.t + dt)
+        if dv:
+            self.set_value(self.v + dv)
 
 def _default_keys() -> List[Keyframe]:
     return [Keyframe(0.0, 0.0), Keyframe(5.0, 0.0)]
@@ -38,7 +109,7 @@ class Track:
         eps = 1e-9
         for i in range(1, len(ks)):
             if ks[i].t <= ks[i-1].t:
-                ks[i].t = ks[i-1].t + eps
+                ks[i].set_time(ks[i-1].t + eps)
         self.keys = ks
 
 @dataclass(init=False)

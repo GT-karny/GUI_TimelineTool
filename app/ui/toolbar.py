@@ -5,7 +5,7 @@ from PySide6 import QtWidgets, QtCore, QtGui
 
 class TimelineToolbar(QtWidgets.QToolBar):
     # ---- 外向きシグナル ----
-    sig_interp_changed = QtCore.Signal(str)     # "cubic" | "linear" | "step"
+    sig_interp_changed = QtCore.Signal(str)     # "cubic" | "linear" | "step" | "bezier"
     sig_duration_changed = QtCore.Signal(float) # seconds
     sig_rate_changed = QtCore.Signal(float)     # Hz
     sig_add = QtCore.Signal()
@@ -24,7 +24,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
 
         # --- Widgets ---
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["cubic", "linear", "step"])
+        self.mode_combo.addItems(["cubic", "linear", "step", "bezier"])
 
         self.duration = QtWidgets.QDoubleSpinBox()
         self.duration.setRange(0.1, 10000.0)
@@ -94,7 +94,7 @@ class TimelineToolbar(QtWidgets.QToolBar):
 
     # ---- Optional: 外部からの更新用ヘルパ ----
     def set_interp(self, name: str) -> None:
-        """'cubic'|'linear'|'step' をUIに反映（signalは出さない）。"""
+        """'cubic'|'linear'|'step'|'bezier' をUIに反映（signalは出さない）。"""
         i = self.mode_combo.findText(name)
         if i >= 0:
             # note: setCurrentIndexはcurrentTextChangedを発火するので、
