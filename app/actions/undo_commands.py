@@ -93,8 +93,11 @@ class MoveKeyCommand(QUndoCommand, _ClampMixin):
         self.at, self.av = after
 
     def _apply(self, t, v):
-        self.key.t = float(max(0.0, t))
-        self.key.v = float(v)
+        new_t = float(max(0.0, t))
+        new_v = float(v)
+        dt = new_t - self.key.t
+        dv = new_v - self.key.v
+        self.key.translate(dt, dv)
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
@@ -118,13 +121,13 @@ class SetKeyTimeCommand(QUndoCommand, _ClampMixin):
         self.new_t = float(new_t)
 
     def redo(self):
-        self.key.t = max(0.0, self.new_t)
+        self.key.set_time(max(0.0, self.new_t))
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
 
     def undo(self):
-        self.key.t = max(0.0, self.old_t)
+        self.key.set_time(max(0.0, self.old_t))
         track = _find_track(self.tl, self.track_id)
         if track is not None:
             self._clamp(track)
@@ -139,10 +142,10 @@ class SetKeyValueCommand(QUndoCommand):
         self.new_v = float(new_v)
 
     def redo(self):
-        self.key.v = self.new_v
+        self.key.set_value(self.new_v)
 
     def undo(self):
-        self.key.v = self.old_v
+        self.key.set_value(self.old_v)
 
 
 class AddTrackCommand(QUndoCommand):

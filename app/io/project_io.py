@@ -2,7 +2,13 @@ import json
 from pathlib import Path
 from typing import Iterable, List
 
-from ..core.timeline import Timeline, Track, Keyframe, InterpMode
+from ..core.timeline import Timeline, Track, Keyframe, InterpMode, Handle
+
+
+def _serialize_handle(handle: Handle | None) -> dict | None:
+    if handle is None:
+        return None
+    return {"t": handle.t, "v": handle.v}
 
 
 def _serialize_track(track: Track) -> dict:
@@ -10,7 +16,15 @@ def _serialize_track(track: Track) -> dict:
         "id": track.track_id,
         "name": track.name,
         "interp": track.interp.value,
-        "keys": [{"t": k.t, "v": k.v} for k in track.keys],
+        "keys": [
+            {
+                "t": k.t,
+                "v": k.v,
+                "handle_in": _serialize_handle(k.handle_in),
+                "handle_out": _serialize_handle(k.handle_out),
+            }
+            for k in track.keys
+        ],
     }
 
 

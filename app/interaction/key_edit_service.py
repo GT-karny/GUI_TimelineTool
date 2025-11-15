@@ -78,8 +78,9 @@ class KeyEditService:
             return False
 
         mp = scene_to_view(scene_pos)
-        key.t = float(max(0.0, mp.x()))
-        key.v = float(mp.y())
+        new_t = float(max(0.0, mp.x()))
+        new_v = float(mp.y())
+        key.translate(new_t - key.t, new_v - key.v)
 
         track = self._track_for_id(key_point.track_id)
         if track is not None:

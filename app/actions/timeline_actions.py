@@ -51,16 +51,18 @@ class TimelineActions:
     # ---------------- 編集ユーティリティ（任意） ----------------
     def move_key(self, key_obj: Keyframe, dt: float = 0.0, dv: float = 0.0) -> None:
         """単一キーの移動（値は相対）。"""
-        key_obj.t = float(max(0.0, key_obj.t + dt))
-        key_obj.v = float(key_obj.v + dv)
+        target_t = float(max(0.0, key_obj.t + dt))
+        target_v = float(key_obj.v + dv)
+        key_obj.translate(target_t - key_obj.t, target_v - key_obj.v)
         self.timeline.track.clamp_times()
 
     def move_keys_bulk(self, keys: Iterable[Keyframe], dt: float = 0.0, dv: float = 0.0) -> None:
         """複数キーの一括移動（相対）。"""
         dt = float(dt); dv = float(dv)
         for k in keys:
-            k.t = float(max(0.0, k.t + dt))
-            k.v = float(k.v + dv)
+            target_t = float(max(0.0, k.t + dt))
+            target_v = float(k.v + dv)
+            k.translate(target_t - k.t, target_v - k.v)
         self.timeline.track.clamp_times()
 
     # ---------------- エクスポート ----------------

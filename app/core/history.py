@@ -21,7 +21,17 @@ class _TrackSnapshot:
 
 
 def _clone_keyframes(keys: List[Keyframe]) -> List[Keyframe]:
-    return [Keyframe(k.t, k.v) for k in keys]
+    cloned: List[Keyframe] = []
+    for k in keys:
+        cloned.append(
+            Keyframe(
+                k.t,
+                k.v,
+                handle_in=k.handle_in.copy() if k.handle_in is not None else None,
+                handle_out=k.handle_out.copy() if k.handle_out is not None else None,
+            )
+        )
+    return cloned
 
 
 def _snapshot_from_timeline(timeline: Timeline) -> _TimelineSnapshot:
