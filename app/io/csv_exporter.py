@@ -34,7 +34,7 @@ def _header_name(track: Track, index: int, collisions: Dict[str, int]) -> str:
     collisions[key] = count + 1
     if count > 0:
         safe = f"{safe}_{count+1}"
-    return f"track_{safe}"
+    return f"{safe}"
 
 
 def build_csv_header(tracks: Sequence[Track]) -> List[str]:
