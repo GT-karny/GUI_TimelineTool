@@ -15,27 +15,47 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         super().__init__("Telemetry", parent)
         self._ui_updating = False
 
-        layout = QtWidgets.QFormLayout(self)
-        layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
 
         self.chk_enabled = QtWidgets.QCheckBox("Enable UDP telemetry", self)
-        layout.addRow(self.chk_enabled)
+        layout.addWidget(self.chk_enabled)
+
+        def _make_labeled_widget(label_text: str, widget: QtWidgets.QWidget) -> QtWidgets.QWidget:
+            container = QtWidgets.QWidget(self)
+            container_layout = QtWidgets.QHBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setSpacing(4)
+
+            label = QtWidgets.QLabel(label_text, container)
+            if hasattr(label, "setBuddy"):
+                label.setBuddy(widget)
+            container_layout.addWidget(label)
+            container_layout.addWidget(widget)
+            return container
 
         self.txt_ip = QtWidgets.QLineEdit(self)
         self.txt_ip.setPlaceholderText("127.0.0.1")
-        layout.addRow("IP", self.txt_ip)
+        self.txt_ip.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(_make_labeled_widget("IP", self.txt_ip))
 
         self.spin_port = QtWidgets.QSpinBox(self)
         self.spin_port.setRange(1, 65535)
-        layout.addRow("Port", self.spin_port)
+        self.spin_port.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(_make_labeled_widget("Port", self.spin_port))
 
         self.spin_rate = QtWidgets.QSpinBox(self)
         self.spin_rate.setRange(1, 240)
-        layout.addRow("Rate (Hz)", self.spin_rate)
+        self.spin_rate.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(_make_labeled_widget("Rate (Hz)", self.spin_rate))
 
         self.txt_session = QtWidgets.QLineEdit(self)
         self.txt_session.setPlaceholderText("Leave blank for auto")
-        layout.addRow("Session ID", self.txt_session)
+        self.txt_session.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(_make_labeled_widget("Session ID", self.txt_session))
+
+        layout.addStretch(1)
 
         self._connect_signals()
 
