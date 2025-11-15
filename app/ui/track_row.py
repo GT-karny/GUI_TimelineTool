@@ -14,6 +14,7 @@ class TrackRow(QtWidgets.QWidget):
     """1トラック分のラベルとタイムラインプロットをまとめた行。"""
 
     activated = QtCore.Signal(object)
+    name_edited = QtCore.Signal(str, str)
 
     def __init__(
         self,
@@ -28,10 +29,17 @@ class TrackRow(QtWidgets.QWidget):
         self._track = track
         self._duration_s = float(duration_s)
         self._active = False
+        self._last_committed_old_name: Optional[str] = None
 
-        self.label = QtWidgets.QLabel(track.name, self)
-        self.label.setMinimumWidth(120)
-        self.label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self._syncing_name = False
+
+        self.name_edit = QtWidgets.QLineEdit(track.name, self)
+        self.name_edit.setObjectName("TrackNameEdit")
+        self.name_edit.setFrame(False)
+        self.name_edit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.name_edit.setMinimumWidth(120)
+        self.name_edit.setPlaceholderText("Track name")
+        self.name_edit.editingFinished.connect(self._on_name_edit_finished)
 
         self.timeline_plot = TimelinePlot(self)
         self.timeline_plot.set_track(track)
@@ -59,7 +67,7 @@ class TrackRow(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.addWidget(self.label)
+        layout.addWidget(self.name_edit)
         layout.addWidget(self.timeline_plot, 1)
 
     # ---- public API ----
@@ -69,7 +77,7 @@ class TrackRow(QtWidgets.QWidget):
 
     def set_track(self, track: Track) -> None:
         self._track = track
-        self.label.setText(track.name)
+        self._set_name_text(track.name)
         self.timeline_plot.set_track(track)
 
     def set_duration(self, duration_s: float) -> None:
@@ -81,7 +89,7 @@ class TrackRow(QtWidgets.QWidget):
 
     def refresh(self) -> None:
         """トラックの最新状態を反映。"""
-        self.label.setText(self._track.name)
+        self._set_name_text(self._track.name)
         self.timeline_plot.update_curve()
 
     def set_active(self, active: bool) -> None:
@@ -102,3 +110,42 @@ class TrackRow(QtWidgets.QWidget):
         if event.button() == QtCore.Qt.LeftButton:
             self.activated.emit(self)
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.LeftButton:
+            self.name_edit.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+            self.name_edit.selectAll()
+        super().mouseDoubleClickEvent(event)
+
+    # ---- helpers ----------------------------------------------------------
+    def _set_name_text(self, text: str) -> None:
+        if self.name_edit.text() == text:
+            return
+        self._syncing_name = True
+        self.name_edit.setText(text)
+        self._syncing_name = False
+
+    def _on_name_edit_finished(self) -> None:
+        if self._syncing_name:
+            return
+        self._commit_name_edit()
+
+    def _commit_name_edit(self) -> None:
+        new_name = self.name_edit.text().strip()
+        if not new_name:
+            self._set_name_text(self._track.name)
+            return
+
+        if new_name == self._track.name:
+            self._set_name_text(self._track.name)
+            return
+
+        self._last_committed_old_name = self._track.name
+        self._track.name = new_name
+        self._set_name_text(new_name)
+        self.name_edited.emit(self._track.track_id, new_name)
+
+    def consume_last_committed_old_name(self) -> Optional[str]:
+        old = self._last_committed_old_name
+        self._last_committed_old_name = None
+        return old

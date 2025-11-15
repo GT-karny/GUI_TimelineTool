@@ -1,7 +1,7 @@
 """TrackContainer - タイムラインのトラック行を束ねる。"""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6 import QtCore, QtWidgets
 
@@ -15,6 +15,7 @@ class TrackContainer(QtWidgets.QWidget):
 
     request_add_track = QtCore.Signal()
     request_remove_track = QtCore.Signal(str)
+    request_rename_track = QtCore.Signal(str, str)
     rows_changed = QtCore.Signal()
     active_row_changed = QtCore.Signal(object)
 
@@ -31,6 +32,7 @@ class TrackContainer(QtWidgets.QWidget):
         self._rows: List[TrackRow] = []
         self._active_row: Optional[TrackRow] = None
         self._active_track_id: Optional[str] = None
+        self._pending_rename_old_names: Dict[str, Optional[str]] = {}
 
         self._build_ui()
 
@@ -120,6 +122,8 @@ class TrackContainer(QtWidgets.QWidget):
         layout.addLayout(self._rows_layout)
 
     def _rebuild_rows(self) -> None:
+        self._pending_rename_old_names.clear()
+
         if self._timeline is None:
             while self._rows_layout.count():
                 self._rows_layout.takeAt(0)
@@ -147,6 +151,7 @@ class TrackContainer(QtWidgets.QWidget):
             else:
                 row = TrackRow(track, playback=self._playback, duration_s=duration, parent=self)
                 row.activated.connect(self._on_row_activated)
+            self._ensure_row_connections(row)
             new_rows.append(row)
             self._rows_layout.addWidget(row)
 
@@ -162,6 +167,13 @@ class TrackContainer(QtWidgets.QWidget):
         self._link_viewboxes()
         self._update_remove_enabled()
         self.rows_changed.emit()
+
+    def _ensure_row_connections(self, row: TrackRow) -> None:
+        try:
+            row.name_edited.disconnect(self._on_row_name_edited)
+        except (TypeError, RuntimeError):
+            pass
+        row.name_edited.connect(self._on_row_name_edited)
 
     def _link_viewboxes(self) -> None:
         if not self._rows:
@@ -189,6 +201,18 @@ class TrackContainer(QtWidgets.QWidget):
 
     def _on_row_activated(self, row: TrackRow) -> None:
         self.set_active_row(row)
+
+    def _on_row_name_edited(self, track_id: str, name: str) -> None:
+        for row in self._rows:
+            if row.track.track_id == track_id:
+                old_name = row.consume_last_committed_old_name()
+                if old_name is not None:
+                    self._pending_rename_old_names[track_id] = old_name
+                break
+        self.request_rename_track.emit(track_id, name)
+
+    def take_pending_rename_old_name(self, track_id: str) -> Optional[str]:
+        return self._pending_rename_old_names.pop(track_id, None)
 
     def _restore_active_row(self) -> None:
         if not self._rows:

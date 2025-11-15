@@ -167,6 +167,40 @@ class AddTrackCommand(QUndoCommand):
             self.tl.tracks.remove(self.track)
 
 
+class RenameTrackCommand(QUndoCommand):
+    def __init__(
+        self,
+        tl: Timeline,
+        track_id: str,
+        new_name: str,
+        *,
+        old_name: Optional[str] = None,
+        label: str = "Rename Track",
+        parent: Optional[QUndoCommand] = None,
+    ) -> None:
+        super().__init__(label, parent)
+        self.tl = tl
+        self.track_id = str(track_id)
+        self.new_name = str(new_name)
+        track = _find_track(tl, self.track_id)
+        if old_name is not None:
+            self.old_name = str(old_name)
+        else:
+            self.old_name = track.name if track is not None else self.new_name
+
+    def redo(self):
+        track = _find_track(self.tl, self.track_id)
+        if track is None:
+            return
+        track.name = self.new_name
+
+    def undo(self):
+        track = _find_track(self.tl, self.track_id)
+        if track is None:
+            return
+        track.name = self.old_name
+
+
 class RemoveTrackCommand(QUndoCommand):
     def __init__(self, tl: Timeline, track_id: str, label: str = "Remove Track",
                  parent: Optional[QUndoCommand] = None):
