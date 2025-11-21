@@ -560,3 +560,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
+
+        self._build_other_menu()
+
+    def _build_other_menu(self) -> None:
+        menu = self.menuBar().addMenu("Other")
+
+        self.act_debug_log = menu.addAction("Debug Log")
+        self.act_debug_log.setCheckable(True)
+        self.act_debug_log.toggled.connect(self._on_debug_log_toggled)
+
+        # Initialize state
+        self.act_debug_log.setChecked(self.telemetry_controller.get_debug_log_state())
+
+    def _on_debug_log_toggled(self, checked: bool) -> None:
+        self.telemetry_controller.set_debug_log(checked)

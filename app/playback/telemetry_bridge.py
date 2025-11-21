@@ -77,6 +77,7 @@ class TelemetryBridge:
         self._playing = False
         self._period_ns = self._compute_period_ns(self.settings.rate_hz)
         self._next_deadline_ns: Optional[int] = None
+        self._force_send = False
         self._running = True
 
         self._thread = threading.Thread(target=self._run, name="TelemetryBridge", daemon=True)
@@ -108,6 +109,8 @@ class TelemetryBridge:
         playhead_ms: int,
         frame_index: int,
         track_snapshots: Iterable[Mapping[str, object]],
+        *,
+        force_send: bool = False,
     ) -> None:
         """Store the most recent telemetry data for background transmission."""
 
@@ -120,20 +123,31 @@ class TelemetryBridge:
         with self._state_lock:
             previous_playing = self._playing
             self._playing = bool(playing)
+            if force_send:
+                self._force_send = True
+            
             if not self._playing:
                 self._next_deadline_ns = None
             elif not previous_playing:
                 self._next_deadline_ns = None
             self._latest_snapshot = snapshot
 
-        if previous_playing != self._playing or not self._playing:
+        if previous_playing != self._playing or not self._playing or force_send:
             self._wakeup.set()
 
     def _run(self) -> None:
         while self._running:
             with self._state_lock:
                 snapshot_available = self._latest_snapshot is not None
-                playing = self._playing and self.settings.enabled and snapshot_available
+                force_send = self._force_send
+                if force_send:
+                    self._force_send = False
+                
+                playing = (
+                    self.settings.enabled
+                    and snapshot_available
+                    and (self._playing or force_send)
+                )
                 period_ns = self._period_ns
                 next_deadline = self._next_deadline_ns
 
@@ -144,12 +158,16 @@ class TelemetryBridge:
 
             now_ns = time.perf_counter_ns()
             if next_deadline is None:
-                next_deadline = now_ns + period_ns
-                with self._state_lock:
-                    self._next_deadline_ns = next_deadline
-                continue
+                # If we are forcing send, we just send immediately.
+                # If we are playing, we set the deadline for the NEXT frame.
+                # But here we just want to fall through to send.
+                pass
+                # next_deadline = now_ns + period_ns
+                # with self._state_lock:
+                #     self._next_deadline_ns = next_deadline
+                # continue
 
-            if now_ns < next_deadline:
+            if next_deadline is not None and now_ns < next_deadline:
                 remaining_ns = next_deadline - now_ns
                 if remaining_ns > 2_000_000:
                     wait_s = max(0.0, (remaining_ns - 1_000_000) / 1e9)
@@ -168,9 +186,14 @@ class TelemetryBridge:
             payload = self.assembler.build_payload(
                 snapshot.playhead_ms, snapshot.frame_index, snapshot.tracks
             )
+            if self.settings.debug_log:
+                print(f"DEBUG: Sending payload: {len(payload)} bytes")
             self.sender.submit(payload)
 
             sent_ns = time.perf_counter_ns()
+            if next_deadline is None:
+                next_deadline = sent_ns
+            
             next_deadline += period_ns
             if sent_ns >= next_deadline:
                 while next_deadline <= sent_ns:

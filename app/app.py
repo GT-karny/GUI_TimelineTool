@@ -10,10 +10,12 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.ui.main_window import MainWindow
+from app.ui.theme import apply_dark_theme
 
 def main():
     logging.basicConfig(level=logging.INFO)
     app = QtWidgets.QApplication(sys.argv)
+    apply_dark_theme(app)
     win = MainWindow(); win.show()
     sys.exit(app.exec())
 

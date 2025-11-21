@@ -44,6 +44,15 @@ def test_placeholder_session_id_is_applied_on_set(panel):
     assert gathered.session_id == "auto-generated"
 
 
+def test_session_id_field_clears_when_placeholder_used(panel):
+    panel.set_settings(TelemetrySettings(session_id="manual-id"))
+
+    panel.set_settings(TelemetrySettings(session_id=None), session_placeholder="new-auto")
+
+    assert panel.txt_session.text() == ""
+    assert panel.get_settings().session_id == "new-auto"
+
+
 def test_settings_changed_signal_emits_updated_values(panel, qtbot):
     emissions: list[TelemetrySettings] = []
     panel.settings_changed.connect(emissions.append)

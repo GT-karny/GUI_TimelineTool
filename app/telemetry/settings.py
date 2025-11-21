@@ -14,6 +14,9 @@ class TelemetrySettings:
     port: int = 9000
     rate_hz: int = 90
     session_id: Optional[str] = None
+    sync_enabled: bool = False
+    sync_port: int = 9001
+    debug_log: bool = False
 
 
 def _clamp_port(value: int) -> int:
@@ -42,11 +45,19 @@ def load_settings(qsettings: QSettings) -> TelemetrySettings:
     port_raw = qsettings.value("telemetry/port", 9000)
     rate_raw = qsettings.value("telemetry/rate_hz", 90)
     session_id = qsettings.value("telemetry/session_id", None)
+    sync_enabled_raw = qsettings.value("telemetry/sync_enabled", False)
+    sync_port_raw = qsettings.value("telemetry/sync_port", 9001)
+    debug_log_raw = qsettings.value("telemetry/debug_log", False)
 
     try:
         port = _clamp_port(int(port_raw))
     except (TypeError, ValueError):
         port = 9000
+
+    try:
+        sync_port = _clamp_port(int(sync_port_raw))
+    except (TypeError, ValueError):
+        sync_port = 9001
 
     try:
         rate = _clamp_rate(int(rate_raw))
@@ -69,6 +80,9 @@ def load_settings(qsettings: QSettings) -> TelemetrySettings:
         port=port,
         rate_hz=rate,
         session_id=session_id_str,
+        sync_enabled=_parse_bool(sync_enabled_raw),
+        sync_port=sync_port,
+        debug_log=_parse_bool(debug_log_raw),
     )
 
 
@@ -83,3 +97,7 @@ def save_settings(qsettings: QSettings, settings: TelemetrySettings) -> None:
         qsettings.setValue("telemetry/session_id", settings.session_id)
     else:
         qsettings.remove("telemetry/session_id")
+    
+    qsettings.setValue("telemetry/sync_enabled", bool(settings.sync_enabled))
+    qsettings.setValue("telemetry/sync_port", _clamp_port(settings.sync_port))
+    qsettings.setValue("telemetry/debug_log", bool(settings.debug_log))
