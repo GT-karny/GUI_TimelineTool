@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional, TYPE_CHECKING
 
+from PySide6 import QtCore
+
 from ...services.telemetry_sender import build_track_snapshots, snapshots_to_payload
 from ...telemetry.settings import TelemetrySettings
 from ...net.udp_receiver import UdpReceiverService
@@ -100,13 +102,20 @@ class TelemetryController:
     # -------------------- Sync Mode --------------------
     def _on_sync_packet_received(self, time_s: float) -> None:
         """Callback when a sync packet is received."""
+        QtCore.QMetaObject.invokeMethod(
+            self._playback,
+            lambda: self._handle_sync_packet_on_main_thread(time_s),
+            QtCore.Qt.QueuedConnection,
+        )
+
+    def _handle_sync_packet_on_main_thread(self, time_s: float) -> None:
         if self._telemetry_bridge.settings.debug_log:
             print(f"DEBUG: Sync packet received: {time_s}")
-        
+
         # Update playhead position
         self._playback.set_playhead(time_s)
-        
-        # 2. Send telemetry immediately
+
+        # Send telemetry immediately
         self._publish_snapshot(time_s, playing=False, advance_frame=True, force_send=True)
 
     # -------------------- Internal helpers --------------------
