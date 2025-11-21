@@ -47,6 +47,9 @@ class TrackRow(QtWidgets.QWidget):
         if playback is not None:
             self.timeline_plot.set_playback_controller(playback)
 
+        # Install event filter to capture clicks on the plot
+        self.timeline_plot.plot.scene().installEventFilter(self)
+
         self.setObjectName("TrackRow")
         self.setProperty("active", False)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
@@ -73,26 +76,31 @@ class TrackRow(QtWidgets.QWidget):
     # ---- public API ----
     @property
     def track(self) -> Track:
+        """Return the associated Track object."""
         return self._track
 
     def set_track(self, track: Track) -> None:
+        """Update the track object and refresh the UI."""
         self._track = track
         self._set_name_text(track.name)
         self.timeline_plot.set_track(track)
 
     def set_duration(self, duration_s: float) -> None:
+        """Update the duration of the timeline plot."""
         self._duration_s = float(duration_s)
         self.timeline_plot.set_duration(duration_s)
 
     def set_playback_controller(self, playback: Optional[PlaybackController]) -> None:
+        """Set the playback controller for the timeline plot."""
         self.timeline_plot.set_playback_controller(playback)
 
     def refresh(self) -> None:
-        """トラックの最新状態を反映。"""
+        """Refresh the track name and curve from the model."""
         self._set_name_text(self._track.name)
         self.timeline_plot.update_curve()
 
     def set_active(self, active: bool) -> None:
+        """Set the active state of the row (visual highlighting)."""
         if self._active == active:
             return
         self._active = bool(active)
@@ -116,6 +124,13 @@ class TrackRow(QtWidgets.QWidget):
             self.name_edit.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
             self.name_edit.selectAll()
         super().mouseDoubleClickEvent(event)
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if watched is self.timeline_plot.plot.scene():
+            if event.type() == QtCore.QEvent.GraphicsSceneMousePress:
+                if event.button() == QtCore.Qt.LeftButton:
+                    self.activated.emit(self)
+        return super().eventFilter(watched, event)
 
     # ---- helpers ----------------------------------------------------------
     def _set_name_text(self, text: str) -> None:
