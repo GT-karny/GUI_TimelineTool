@@ -14,6 +14,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("Telemetry", parent)
         self._ui_updating = False
+        self._session_placeholder: str | None = None
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -88,6 +89,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         """Populate UI elements from telemetry settings."""
 
         self._ui_updating = True
+        self._session_placeholder = session_placeholder
         try:
             self.chk_enabled.setChecked(settings.enabled)
             self.txt_ip.setText(settings.ip)
@@ -95,8 +97,10 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             self.spin_rate.setValue(int(settings.rate_hz))
             if settings.session_id:
                 self.txt_session.setText(settings.session_id)
-            elif session_placeholder:
-                self.txt_session.setPlaceholderText(session_placeholder)
+            else:
+                self.txt_session.clear()
+                if session_placeholder:
+                    self.txt_session.setPlaceholderText(session_placeholder)
             self.chk_sync.setChecked(settings.sync_enabled)
             self.spin_sync_port.setValue(int(settings.sync_port))
             self._current_debug_log = settings.debug_log
@@ -107,12 +111,13 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         """Capture telemetry settings from the UI."""
 
         session_text = self.txt_session.text().strip()
+        session_placeholder = (self._session_placeholder or "").strip()
         return TelemetrySettings(
             enabled=self.chk_enabled.isChecked(),
             ip=self.txt_ip.text().strip() or "127.0.0.1",
             port=int(self.spin_port.value()),
             rate_hz=int(self.spin_rate.value()),
-            session_id=session_text or None,
+            session_id=session_text or session_placeholder or None,
             sync_enabled=self.chk_sync.isChecked(),
             sync_port=int(self.spin_sync_port.value()),
             debug_log=getattr(self, "_current_debug_log", False),
