@@ -64,13 +64,8 @@ class UdpReceiverService:
         while not self._stop.is_set():
             try:
                 data, _ = self._sock.recvfrom(1024)
-                if len(data) == 4:
-                    # 4-byte float in network byte order (big endian)
-                    value = struct.unpack("!f", data)[0]
-                    self.on_receive(value)
-                elif len(data) == 8:
-                    # 8-byte double in network byte order (big endian)
-                    value = struct.unpack("!d", data)[0]
+                value = self._decode_payload(data)
+                if value is not None:
                     self.on_receive(value)
                 else:
                     logger.warning(
@@ -84,3 +79,33 @@ class UdpReceiverService:
             except Exception:
                 # Ignore malformed packets
                 continue
+
+    def _decode_payload(self, data: bytes) -> Optional[float]:
+        """Decode a UDP payload into a float, supporting both endiannesses.
+
+        Sync mode senders may transmit timestamps as little-endian floats even
+        though network byte order is big-endian. We attempt to decode in
+        network order first and fall back to little-endian when the value looks
+        like a near-zero artifact from swapped bytes.
+        """
+
+        if len(data) == 4:
+            return self._decode_number(data, "f", small_threshold=1e-6)
+        if len(data) == 8:
+            return self._decode_number(data, "d", small_threshold=1e-9)
+        return None
+
+    @staticmethod
+    def _decode_number(data: bytes, fmt: str, *, small_threshold: float) -> float:
+        """Decode a float/double with fallback for little-endian packets."""
+
+        network_value = struct.unpack(f"!{fmt}", data)[0]
+        if data != b"\x00" * len(data):
+            little_value = struct.unpack(f"<{fmt}", data)[0]
+
+            # If network order produces an almost-zero artifact but little-endian
+            # yields a meaningful value, prefer the little-endian interpretation.
+            if abs(network_value) < small_threshold and abs(little_value) >= small_threshold:
+                return little_value
+
+        return network_value
