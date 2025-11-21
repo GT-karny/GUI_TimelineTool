@@ -1,6 +1,7 @@
 """Threaded UDP receiver service for sync mode."""
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 import threading
@@ -58,13 +59,23 @@ class UdpReceiverService:
         # Set a timeout so we can check the stop event periodically if no data comes
         self._sock.settimeout(0.5)
 
+        logger = logging.getLogger(__name__)
+
         while not self._stop.is_set():
             try:
                 data, _ = self._sock.recvfrom(1024)
                 if len(data) == 4:
-                    # Expecting a 4-byte float (Little Endian)
-                    value = struct.unpack("<f", data)[0]
+                    # 4-byte float in network byte order (big endian)
+                    value = struct.unpack("!f", data)[0]
                     self.on_receive(value)
+                elif len(data) == 8:
+                    # 8-byte double in network byte order (big endian)
+                    value = struct.unpack("!d", data)[0]
+                    self.on_receive(value)
+                else:
+                    logger.warning(
+                        "UdpReceiverService received unexpected packet size: %s bytes", len(data)
+                    )
             except socket.timeout:
                 continue
             except OSError:
