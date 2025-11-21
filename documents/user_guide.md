@@ -38,7 +38,13 @@
 ## Telemetry 設定
 1. Telemetry グループで「Enable UDP telemetry」をオンにすると送信が有効化されます。
 2. IP・Port・Rate (Hz)・Session ID を入力します。未入力の場合は既定値が使用されます。
-3. 再生中のみ最新フレームを JSON 形式で送信します。`tools/udp_recv.py` で受信を確認できます。
+3. メニューバー **Telemetry** で送信フォーマットを選択します。`Send JSON payloads` は従来どおりの JSON、`Send binary float payloads` は各トラックの Float 値のみを little-endian float32 で連結した生バイナリです。Debug Log のオン/オフも同メニューから切り替えられます。
+4. Sync Mode で外部時間に合わせる場合、Debug Log をオンにすると UDP 受信スレッド/メインスレッド双方のログを確認できます。
+5. 受信確認スクリプト:
+   - JSON: `python tools/udp_recv.py`
+   - Binary: `python tools/telemetry_binary_receiver.py --layout 1,1,...`
+   - Binary 送信テスト: `python tools/telemetry_binary_sender.py --values 0.0,1.0`
+6. 再生ボタンを押すと、選択した形式でのみ送信されます。バイナリモードには playhead や frame index が含まれないため、受信側で別途扱う前提で利用してください。
 
 ## CSV エクスポート
 1. ツールバーの `Export CSV` ボタン、またはメニューバー **File → Export CSV…** を選択します。

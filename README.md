@@ -1,6 +1,6 @@
 # GUI Timeline Tool
 
-> 現在のアプリケーションバージョン: **0.8.0**（`app/version.py` の `APP_VERSION` を参照）
+> 現在のアプリケーションバージョン: **0.9.0**（`app/version.py` の `APP_VERSION` を参照） / 変更履歴は `documents/release_notes_v0.9.0.md` を参照してください。
 
 GUI Timeline Tool は、複数の Float トラックをキーフレームで編集し、再生や外部出力に活用できる Python + Qt ベースのタイムラインエ
 ディタです。トラックごとの補間モードや値を可視化しながら、CSV エクスポートや UDP テレメトリを備えたスタンドアロンアプリケーション
@@ -12,7 +12,7 @@ GUI Timeline Tool は、複数の Float トラックをキーフレームで編�
 - Inspector パネルからの数値編集、Undo/Redo 対応のドラッグ操作
 - 再生・停止・ループ切り替え、ズーム/フィットなどのビュー操作
 - タイムライン内容の CSV エクスポート（各トラックは `track_<name>` 列として書き出し）
-- 再生中のみ発火する UDP JSON テレメトリ送信（送信先・周波数を指定可能）
+- 再生中のみ発火する UDP テレメトリ送信（JSON / バイナリ Float32 を Telemetry メニューで切替可能。送信先・周波数・Session ID・Debug Log を GUI から制御）
 - 設定内容の永続化（QSettings 利用）
 
 ## 動作環境
@@ -61,13 +61,14 @@ pyinstaller --clean --noconfirm tools/timeline_tool.spec
 ### UDP テレメトリの有効化
 1. メインウィンドウ上部の Telemetry グループで「Enable UDP telemetry」をオンにします。
 2. 宛先 IP・ポート・送信レート (Hz)・Session ID を入力します。
-3. 再生ボタンを押すと、再生中のみ JSON メッセージが送出されます。詳しい仕様は [documents/telemetry.md](documents/telemetry.md) を参照してください。
+3. メニューバー **Telemetry** から `Send JSON payloads` / `Send binary float payloads` を選択し、Debug Log のオン/オフも切り替えます。
+4. 再生ボタンを押すと、再生中のみ選択した形式でメッセージが送出されます。詳しい仕様は [documents/telemetry.md](documents/telemetry.md) を参照してください。
 
 ## UDP テレメトリの概要
-- 送信プロトコル: UDP / JSON
+- 送信プロトコル: UDP / JSON または UDP / バイナリ Float32（メニューで切替）
 - 送信タイミング: 再生中のみ。停止・一時停止時は送信されません。
 - 既定宛先: `127.0.0.1:9000`
-- 最小受信確認: `python tools/udp_recv.py`
+- 受信確認: JSON は `python tools/udp_recv.py`、バイナリは `python tools/telemetry_binary_receiver.py --layout 1,1,...` を利用
 - 詳細仕様とトラブルシュートは [documents/telemetry.md](documents/telemetry.md) にまとめています。
 
 ## 設定 (QSettings)
@@ -80,6 +81,7 @@ pyinstaller --clean --noconfirm tools/timeline_tool.spec
 | `/telemetry/port` | int | 送信先ポート番号 |
 | `/telemetry/rate_hz` | int | 送信周波数 (Hz) |
 | `/telemetry/session_id` | str | 送信セッション識別子 |
+| `/telemetry/payload_format` | str | `json` / `binary` の送信形式 |
 | `/playback/loop_enabled` | bool | ループ再生設定 |
 
 個別の設定値や UI 操作との対応は [documents/telemetry.md](documents/telemetry.md) および [documents/user_guide.md](documents/user_guide.md) を参照してください。
