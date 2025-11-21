@@ -143,7 +143,11 @@ class TelemetryBridge:
                 if force_send:
                     self._force_send = False
                 
-                playing = (self._playing and self.settings.enabled and snapshot_available) or (force_send and snapshot_available)
+                playing = (
+                    self.settings.enabled
+                    and snapshot_available
+                    and (self._playing or force_send)
+                )
                 period_ns = self._period_ns
                 next_deadline = self._next_deadline_ns
 
