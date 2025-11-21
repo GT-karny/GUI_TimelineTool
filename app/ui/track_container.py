@@ -39,13 +39,14 @@ class TrackContainer(QtWidgets.QWidget):
 
     # ---- public API ----
     def set_timeline(self, timeline: Timeline) -> None:
+        previous_timeline = self._timeline
         self._timeline = timeline
 
         # Check if structure changed
         current_ids = [row.track.track_id for row in self._rows]
         new_ids = [t.track_id for t in timeline.iter_tracks()]
 
-        if current_ids == new_ids:
+        if current_ids == new_ids and previous_timeline is timeline:
             self.refresh_all_rows()
             return
 
