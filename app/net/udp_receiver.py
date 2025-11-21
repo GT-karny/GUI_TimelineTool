@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import socket
 import struct
 import threading
@@ -90,22 +91,44 @@ class UdpReceiverService:
         """
 
         if len(data) == 4:
-            return self._decode_number(data, "f", small_threshold=1e-6)
+            return self._decode_number(
+                data, "f", small_threshold=1e-4, large_threshold=1e30
+            )
         if len(data) == 8:
-            return self._decode_number(data, "d", small_threshold=1e-9)
+            return self._decode_number(
+                data, "d", small_threshold=1e-9, large_threshold=1e100
+            )
         return None
 
     @staticmethod
-    def _decode_number(data: bytes, fmt: str, *, small_threshold: float) -> float:
+    def _decode_number(
+        data: bytes, fmt: str, *, small_threshold: float, large_threshold: float
+    ) -> float:
         """Decode a float/double with fallback for little-endian packets."""
 
         network_value = struct.unpack(f"!{fmt}", data)[0]
-        if data != b"\x00" * len(data):
-            little_value = struct.unpack(f"<{fmt}", data)[0]
 
-            # If network order produces an almost-zero artifact but little-endian
-            # yields a meaningful value, prefer the little-endian interpretation.
-            if abs(network_value) < small_threshold and abs(little_value) >= small_threshold:
-                return little_value
+        # An all-zero payload is unambiguous, so skip little-endian heuristics
+        # to keep the fastest path for the common case.
+        if data == b"\x00" * len(data):
+            return network_value
+
+        little_value = struct.unpack(f"<{fmt}", data)[0]
+
+        # Prefer little-endian when network order decodes to a denormal/near-zero
+        # value but little-endian yields a meaningful magnitude.
+        if abs(network_value) < small_threshold and abs(little_value) >= small_threshold:
+            return little_value
+
+        # If network order produces an extremely large magnitude (a common
+        # artifact of swapped bytes) but the little-endian interpretation is
+        # finite and notably smaller, treat the packet as little-endian.
+        if (
+            (not math.isfinite(network_value)
+            or abs(network_value) > large_threshold)
+            and math.isfinite(little_value)
+            and abs(little_value) < abs(network_value)
+        ):
+            return little_value
 
         return network_value
