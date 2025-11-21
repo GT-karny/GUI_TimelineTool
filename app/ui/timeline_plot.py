@@ -28,8 +28,8 @@ class TimelinePlot(QtWidgets.QWidget):
         self._playback: Optional[PlaybackController] = None
 
         # ---- Plot 構築 ----
-        self.plot = pg.PlotWidget(background="w")
-        self.plot.showGrid(x=True, y=True, alpha=0.25)
+        self.plot = pg.PlotWidget(background="#2b2b2b")
+        self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.plot.setLabel("bottom", "Time (s)")
         self.plot.setLabel("left", "Value")
 
@@ -37,11 +37,11 @@ class TimelinePlot(QtWidgets.QWidget):
         self.plot.plotItem.vb.enableAutoRange(x=False, y=False)
 
         # 曲線・点・プレイヘッド
-        self.curve_item = self.plot.plot([], [], pen=pg.mkPen(0, 0, 0, 220, width=2))
+        self.curve_item = self.plot.plot([], [], pen=pg.mkPen(200, 200, 200, 255, width=2))
         self.handle_lines = pg.PlotDataItem(
             [],
             [],
-            pen=pg.mkPen(100, 100, 100, 150, width=1),
+            pen=pg.mkPen(150, 150, 150, 150, width=1),
         )
         self.plot.addItem(self.handle_lines)
         self.handle_points = pg.ScatterPlotItem(size=8)
@@ -52,7 +52,7 @@ class TimelinePlot(QtWidgets.QWidget):
         self.plot.addItem(self.points)
 
         self.playhead = pg.InfiniteLine(
-            pos=0.0, angle=90, movable=False, pen=pg.mkPen(200, 0, 0, 200)
+            pos=0.0, angle=90, movable=False, pen=pg.mkPen(255, 50, 50, 200)
         )
         self.plot.addItem(self.playhead)
 

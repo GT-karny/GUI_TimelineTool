@@ -56,8 +56,8 @@ class TrackRow(QtWidgets.QWidget):
         self.setStyleSheet(
             """
             #TrackRow[active="true"] {
-                border: 1px solid rgba(0, 120, 215, 180);
-                background-color: rgba(0, 120, 215, 30);
+                border: 1px solid rgba(60, 160, 255, 200);
+                background-color: rgba(60, 160, 255, 40);
                 border-radius: 4px;
             }
             #TrackRow[active="false"] {
