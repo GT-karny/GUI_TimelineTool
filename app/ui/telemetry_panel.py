@@ -15,6 +15,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         super().__init__("Telemetry", parent)
         self._ui_updating = False
         self._session_placeholder: str | None = None
+        self._current_payload_format: str = "json"
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -104,6 +105,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             self.chk_sync.setChecked(settings.sync_enabled)
             self.spin_sync_port.setValue(int(settings.sync_port))
             self._current_debug_log = settings.debug_log
+            self._current_payload_format = settings.payload_format
         finally:
             self._ui_updating = False
 
@@ -121,6 +123,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             sync_enabled=self.chk_sync.isChecked(),
             sync_port=int(self.spin_sync_port.value()),
             debug_log=getattr(self, "_current_debug_log", False),
+            payload_format=getattr(self, "_current_payload_format", "json"),
         )
 
     def _on_field_changed(self) -> None:

@@ -88,6 +88,9 @@ class TelemetryController(QtCore.QObject):
     def get_debug_log_state(self) -> bool:
         return self._telemetry_bridge.settings.debug_log
 
+    def get_payload_format(self) -> str:
+        return self._telemetry_bridge.settings.payload_format
+
     def set_debug_log(self, enabled: bool) -> None:
         """Update debug log setting."""
         current = self._telemetry_bridge.settings
@@ -100,6 +103,24 @@ class TelemetryController(QtCore.QObject):
             sync_enabled=current.sync_enabled,
             sync_port=current.sync_port,
             debug_log=enabled,
+            payload_format=current.payload_format,
+        )
+        self.on_settings_changed(new_settings)
+
+    def set_payload_format(self, payload_format: str) -> None:
+        current = self._telemetry_bridge.settings
+        if current.payload_format == payload_format:
+            return
+        new_settings = TelemetrySettings(
+            enabled=current.enabled,
+            ip=current.ip,
+            port=current.port,
+            rate_hz=current.rate_hz,
+            session_id=current.session_id,
+            sync_enabled=current.sync_enabled,
+            sync_port=current.sync_port,
+            debug_log=current.debug_log,
+            payload_format=payload_format,
         )
         self.on_settings_changed(new_settings)
 

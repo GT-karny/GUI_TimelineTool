@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 from PySide6 import QtWidgets, QtCore
-from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
+from PySide6.QtGui import QActionGroup, QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
 from ..core.timeline import (
@@ -23,6 +23,7 @@ from .toolbar import TimelineToolbar
 from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
 from .telemetry_panel import TelemetryPanel
+from ..telemetry.settings import TelemetrySettings
 
 from ..interaction.selection import SelectionManager, SelectedKey
 from ..interaction.pos_provider import SingleTrackPosProvider
@@ -255,8 +256,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _connect_telemetry_signals(self) -> None:
         self.telemetry_panel.settings_changed.connect(
-            self.telemetry_controller.on_settings_changed
+            self._on_telemetry_settings_changed
         )
+
+    def _on_telemetry_settings_changed(self, settings: TelemetrySettings) -> None:
+        self.telemetry_controller.on_settings_changed(settings)
+        self._sync_telemetry_menu_state()
 
     def _on_track_rows_changed(self) -> None:
         active = self.track_container.active_row or self.track_container.primary_row
@@ -562,17 +567,56 @@ class MainWindow(QtWidgets.QMainWindow):
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
 
-        self._build_other_menu()
+        self._build_telemetry_menu()
 
-    def _build_other_menu(self) -> None:
-        menu = self.menuBar().addMenu("Other")
+    def _build_telemetry_menu(self) -> None:
+        menu = self.menuBar().addMenu("Telemetry")
+        group = QActionGroup(self)
+        group.setExclusive(True)
 
+        self.act_payload_json = menu.addAction("Send JSON payloads")
+        self.act_payload_json.setCheckable(True)
+        self.act_payload_json.triggered.connect(
+            lambda checked: self._on_payload_format_selected("json", checked)
+        )
+        group.addAction(self.act_payload_json)
+
+        self.act_payload_binary = menu.addAction("Send binary float payloads")
+        self.act_payload_binary.setCheckable(True)
+        self.act_payload_binary.triggered.connect(
+            lambda checked: self._on_payload_format_selected("binary", checked)
+        )
+        group.addAction(self.act_payload_binary)
+
+        menu.addSeparator()
         self.act_debug_log = menu.addAction("Debug Log")
         self.act_debug_log.setCheckable(True)
         self.act_debug_log.toggled.connect(self._on_debug_log_toggled)
 
-        # Initialize state
+        self._telemetry_format_actions = {
+            "json": self.act_payload_json,
+            "binary": self.act_payload_binary,
+        }
+        self._sync_telemetry_menu_state()
+
+    def _sync_telemetry_menu_state(self) -> None:
+        current_format = self.telemetry_controller.get_payload_format()
+        for fmt, action in self._telemetry_format_actions.items():
+            block = action.blockSignals
+            block(True)
+            action.setChecked(fmt == current_format)
+            block(False)
+
+        self.act_debug_log.blockSignals(True)
         self.act_debug_log.setChecked(self.telemetry_controller.get_debug_log_state())
+        self.act_debug_log.blockSignals(False)
+
+    def _on_payload_format_selected(self, fmt: str, checked: bool) -> None:
+        if not checked:
+            return
+        self.telemetry_controller.set_payload_format(fmt)
+        self._sync_telemetry_menu_state()
 
     def _on_debug_log_toggled(self, checked: bool) -> None:
         self.telemetry_controller.set_debug_log(checked)
+        self._sync_telemetry_menu_state()
