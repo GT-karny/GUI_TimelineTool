@@ -17,7 +17,8 @@ def _get_free_port() -> int:
     return port
 
 
-def test_udp_receiver_handles_network_float() -> None:
+@pytest.mark.parametrize("fmt,expected", [("!f", 12.34), ("<f", 56.78)])
+def test_udp_receiver_handles_float_payloads(fmt: str, expected: float) -> None:
     received = []
     received_event = threading.Event()
 
@@ -31,9 +32,8 @@ def test_udp_receiver_handles_network_float() -> None:
     time.sleep(0.05)
 
     try:
-        expected = 12.34
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
-            sender.sendto(struct.pack("!f", expected), ("127.0.0.1", port))
+            sender.sendto(struct.pack(fmt, expected), ("127.0.0.1", port))
 
         assert received_event.wait(1.0)
         assert received[0] == pytest.approx(expected)
@@ -41,7 +41,8 @@ def test_udp_receiver_handles_network_float() -> None:
         receiver.stop()
 
 
-def test_udp_receiver_handles_network_double() -> None:
+@pytest.mark.parametrize("fmt,expected", [("!d", 123456.789), ("<d", 9876.54321)])
+def test_udp_receiver_handles_double_payloads(fmt: str, expected: float) -> None:
     received = []
     received_event = threading.Event()
 
@@ -55,9 +56,8 @@ def test_udp_receiver_handles_network_double() -> None:
     time.sleep(0.05)
 
     try:
-        expected = 123456.789
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
-            sender.sendto(struct.pack("!d", expected), ("127.0.0.1", port))
+            sender.sendto(struct.pack(fmt, expected), ("127.0.0.1", port))
 
         assert received_event.wait(1.0)
         assert received[0] == pytest.approx(expected)
