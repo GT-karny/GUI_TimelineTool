@@ -158,14 +158,15 @@ class TelemetryBridge:
 
             now_ns = time.perf_counter_ns()
             if next_deadline is None:
-                # If we are forcing send, we just send immediately.
-                # If we are playing, we set the deadline for the NEXT frame.
-                # But here we just want to fall through to send.
-                pass
-                # next_deadline = now_ns + period_ns
-                # with self._state_lock:
-                #     self._next_deadline_ns = next_deadline
-                # continue
+                if force_send:
+                    # Force-send ignores the schedule and fires immediately.
+                    pass
+                else:
+                    # Normal playback should schedule the first deadline before sending.
+                    next_deadline = now_ns + period_ns
+                    with self._state_lock:
+                        self._next_deadline_ns = next_deadline
+                    continue
 
             if next_deadline is not None and now_ns < next_deadline:
                 remaining_ns = next_deadline - now_ns

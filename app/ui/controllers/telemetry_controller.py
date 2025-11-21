@@ -15,8 +15,10 @@ if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
     from ...core.timeline import Timeline
 
 
-class TelemetryController:
+class TelemetryController(QtCore.QObject):
     """Manages telemetry updates for the main window."""
+
+    sync_packet_received = QtCore.Signal(float)
 
     def __init__(
         self,
@@ -27,7 +29,9 @@ class TelemetryController:
         timeline_getter: Callable[[], "Timeline"],
         snapshot_builder: Callable[["Timeline", float], object] = build_track_snapshots,
         payload_builder: Callable[[object], object] = snapshots_to_payload,
+        parent: Optional[QtCore.QObject] = None,
     ) -> None:
+        super().__init__(parent)
         self._playback = playback
         self._telemetry_bridge = telemetry_bridge
         self._telemetry_panel = telemetry_panel
@@ -35,6 +39,11 @@ class TelemetryController:
         self._snapshot_builder = snapshot_builder
         self._payload_builder = payload_builder
         self._telemetry_frame_index = 0
+
+        self.sync_packet_received.connect(
+            self._handle_sync_packet_on_main_thread,
+            QtCore.Qt.QueuedConnection,
+        )
 
         # Sync mode receiver
         self._sync_receiver = UdpReceiverService(
@@ -102,11 +111,9 @@ class TelemetryController:
     # -------------------- Sync Mode --------------------
     def _on_sync_packet_received(self, time_s: float) -> None:
         """Callback when a sync packet is received."""
-        QtCore.QMetaObject.invokeMethod(
-            self._playback,
-            lambda: self._handle_sync_packet_on_main_thread(time_s),
-            QtCore.Qt.QueuedConnection,
-        )
+        if self._telemetry_bridge.settings.debug_log:
+            print(f"DEBUG: Sync packet received on UDP thread: {time_s}")
+        self.sync_packet_received.emit(float(time_s))
 
     def _handle_sync_packet_on_main_thread(self, time_s: float) -> None:
         if self._telemetry_bridge.settings.debug_log:

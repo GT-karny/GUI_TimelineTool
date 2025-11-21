@@ -181,6 +181,7 @@ class MainWindow(QtWidgets.QMainWindow):
             telemetry_bridge=self.telemetry_bridge,
             telemetry_panel=self.telemetry_panel,
             timeline_getter=lambda: self.timeline,
+            parent=self,
         )
         self._build_menu()
 
