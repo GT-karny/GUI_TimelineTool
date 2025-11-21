@@ -1,6 +1,7 @@
 """Bridge playback ticks to the telemetry sender."""
 from __future__ import annotations
 
+import struct
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -150,6 +151,7 @@ class TelemetryBridge:
                 )
                 period_ns = self._period_ns
                 next_deadline = self._next_deadline_ns
+                payload_format = self.settings.payload_format
 
             if not playing:
                 self._wakeup.wait(timeout=0.1)
@@ -184,8 +186,8 @@ class TelemetryBridge:
             if snapshot is None:
                 continue
 
-            payload = self.assembler.build_payload(
-                snapshot.playhead_ms, snapshot.frame_index, snapshot.tracks
+            payload = self._build_payload_bytes(
+                snapshot, payload_format
             )
             if self.settings.debug_log:
                 print(f"DEBUG: Sending payload: {len(payload)} bytes")
@@ -202,6 +204,30 @@ class TelemetryBridge:
 
             with self._state_lock:
                 self._next_deadline_ns = next_deadline
+
+    def _build_payload_bytes(
+        self,
+        snapshot: _TelemetrySnapshot,
+        payload_format: str,
+    ) -> bytes:
+        if payload_format == "binary":
+            return self._build_binary_payload(snapshot)
+        return self.assembler.build_payload(
+            snapshot.playhead_ms, snapshot.frame_index, snapshot.tracks
+        )
+
+    @staticmethod
+    def _build_binary_payload(snapshot: _TelemetrySnapshot) -> bytes:
+        buffer = bytearray()
+        pack_float = struct.Struct("<f").pack
+        for track in snapshot.tracks:
+            values = track.get("values", ())
+            for value in values:
+                try:
+                    buffer.extend(pack_float(float(value)))
+                except (TypeError, ValueError):
+                    continue
+        return bytes(buffer)
 
     def shutdown(self) -> None:
         """Shutdown the UDP sender thread."""
