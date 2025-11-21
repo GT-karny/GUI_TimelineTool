@@ -53,7 +53,18 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         self.txt_session = QtWidgets.QLineEdit(self)
         self.txt_session.setPlaceholderText("Leave blank for auto")
         self.txt_session.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.txt_session.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         layout.addWidget(_make_labeled_widget("Session ID", self.txt_session))
+
+        # Sync Mode controls
+        self.chk_sync = QtWidgets.QCheckBox("Sync Mode", self)
+        self.chk_sync.setToolTip("Receive time via UDP and send telemetry immediately")
+        layout.addWidget(self.chk_sync)
+
+        self.spin_sync_port = QtWidgets.QSpinBox(self)
+        self.spin_sync_port.setRange(1, 65535)
+        self.spin_sync_port.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(_make_labeled_widget("Sync Port", self.spin_sync_port))
 
         layout.addStretch(1)
 
@@ -65,6 +76,8 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         self.spin_port.valueChanged.connect(self._on_field_changed)
         self.spin_rate.valueChanged.connect(self._on_field_changed)
         self.txt_session.editingFinished.connect(self._on_field_changed)
+        self.chk_sync.toggled.connect(self._on_field_changed)
+        self.spin_sync_port.valueChanged.connect(self._on_field_changed)
 
     def set_settings(
         self,
@@ -83,9 +96,10 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             if settings.session_id:
                 self.txt_session.setText(settings.session_id)
             elif session_placeholder:
-                self.txt_session.setText(session_placeholder)
-            else:
-                self.txt_session.clear()
+                self.txt_session.setPlaceholderText(session_placeholder)
+            self.chk_sync.setChecked(settings.sync_enabled)
+            self.spin_sync_port.setValue(int(settings.sync_port))
+            self._current_debug_log = settings.debug_log
         finally:
             self._ui_updating = False
 
@@ -99,6 +113,9 @@ class TelemetryPanel(QtWidgets.QGroupBox):
             port=int(self.spin_port.value()),
             rate_hz=int(self.spin_rate.value()),
             session_id=session_text or None,
+            sync_enabled=self.chk_sync.isChecked(),
+            sync_port=int(self.spin_sync_port.value()),
+            debug_log=getattr(self, "_current_debug_log", False),
         )
 
     def _on_field_changed(self) -> None:
