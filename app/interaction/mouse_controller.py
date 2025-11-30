@@ -56,6 +56,7 @@ class MouseController(QtCore.QObject):
         on_changed: Callable[[], None],
         set_playhead: Callable[[float], None],
         key_edit: KeyEditService,
+        on_alt_click_key: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
         self.plot = plot_widget
@@ -64,9 +65,15 @@ class MouseController(QtCore.QObject):
         self.provider = pos_provider
         self.on_changed = on_changed
         self.set_playhead = set_playhead
+        self.on_alt_click_key = on_alt_click_key
 
         # 状態
         self._left_down = False
+        # 左ボタンドラッグ
+        self._left_press_scene: Optional[QPointF] = None
+        self._left_press_hit: Optional[SelectedKey] = None  # 押下時にヒットしたポイントを保存
+        self._left_drag_thresh_px = 5
+        self._left_dragging = False
         # 中ボタンパン
         self._mid_panning = False
         self._mid_last_scene: Optional[QPointF] = None
@@ -147,18 +154,30 @@ class MouseController(QtCore.QObject):
     def _is_shift(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         return bool(ev.modifiers() & QtCore.Qt.ShiftModifier)
 
+    def _is_alt(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
+        return bool(ev.modifiers() & QtCore.Qt.AltModifier)
+
     # ---- Event handlers -------------------------------------------------
     def _handle_left_button_press(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         """Handle left button press by selecting keys or starting marquee."""
 
         self._left_down = True
+        self._left_press_scene = ev.scenePos()
+        self._left_dragging = False
         hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=10)
+        # 押下時にヒットしたポイントを保存（ドラッグ開始時に使用）
+        self._left_press_hit = hit
         if hit is not None:
+            # Alt+クリックの場合は2D編集ウィンドウを開く
+            if self._is_alt(ev) and self.on_alt_click_key is not None:
+                self.on_alt_click_key()
+                return True
+            
             if self._is_shift(ev):
                 self.sel.add_point(hit)
             else:
                 self.sel.set_single_point(hit)
-            self.key_edit.begin_drag(hit)
+            # begin_dragは移動距離が閾値を超えた場合のみ呼び出す
             self.on_changed()
         else:
             if self.sel.selected:
@@ -175,9 +194,34 @@ class MouseController(QtCore.QObject):
 
         if not self._left_down:
             return False
-        if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+        
+        # ドラッグが既に開始されている場合は更新
+        if self._left_dragging:
+            if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+                self.on_changed()
+                return True
+            self.sel.marquee_update(ev.scenePos())
             self.on_changed()
             return True
+        
+        # ドラッグが開始されていない場合、移動距離をチェック
+        if self._left_press_scene is not None:
+            cur = ev.scenePos()
+            press = self._left_press_scene
+            d = abs(cur.x() - press.x()) + abs(cur.y() - press.y())
+            
+            # 移動距離が閾値を超えた場合、ドラッグを開始
+            if d > self._left_drag_thresh_px:
+                self._left_dragging = True
+                # 押下時に選択されたポイントを使用してドラッグを開始
+                # （再ヒットテストではなく、既に選択されているポイントを使用）
+                if self._left_press_hit is not None:
+                    self.key_edit.begin_drag(self._left_press_hit)
+                    if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+                        self.on_changed()
+                        return True
+        
+        # ドラッグが開始されていない場合はマルキーの更新のみ
         self.sel.marquee_update(ev.scenePos())
         self.on_changed()
         return True
@@ -186,10 +230,22 @@ class MouseController(QtCore.QObject):
         """Handle left button release by finalising drags or marquee."""
 
         self._left_down = False
-        self.key_edit.commit_drag()
+        # ドラッグが開始されていた場合のみcommit_dragを呼ぶ
+        if self._left_dragging:
+            self.key_edit.commit_drag()
         self.sel.marquee_commit(additive=self._is_shift(ev))
+        # 状態をリセット
+        self._left_press_scene = None
+        self._left_dragging = False
         self.on_changed()
         return True
+
+    def reset_drag_state(self) -> None:
+        """ドラッグ状態をリセット（2D編集ウィンドウを開く際などに使用）。"""
+        self._left_down = False
+        self._left_press_scene = None
+        self._left_dragging = False
+        self.key_edit.commit_drag()
 
     def _handle_left_button_double_click(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         """Handle double click by adding a key at the cursor position."""

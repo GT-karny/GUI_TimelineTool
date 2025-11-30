@@ -20,7 +20,7 @@ GUI Timeline Tool は複数の Float トラックを編集して再生・エク�
 1. `MainWindow` が `Timeline` モデルと `TimelinePlot` を接続し、`MouseController` を通じてキーフレーム操作を受け取ります。
 2. 編集操作は Undo/Redo 可能な `QUndoCommand` によって `QUndoStack` に積まれます。
 3. `PlaybackController` が QTimer でプレイヘッドを進め、`playhead_changed` シグナルで UI 描画と Telemetry を更新します。
-4. Telemetry 有効時は `TelemetryBridge` が現在値を `TelemetryAssembler` に渡し、`UdpSenderService` が最新ペイロードを送信します。
+4. Telemetry 有効時は `TelemetryBridge` が現在値を JSON (`TelemetryAssembler`) もしくはバイナリ Float32 に変換し、`UdpSenderService` が最新ペイロードを送信します。送信形式は Telemetry メニュー（`TelemetryController`）で管理されます。
 
 ## スレッドとライフサイクル
 - **UI スレッド**: Qt のメインループ。すべてのウィジェットとユーザー操作を処理します。
@@ -29,7 +29,7 @@ GUI Timeline Tool は複数の Float トラックを編集して再生・エク�
 - `MainWindow.closeEvent` で TelemetryBridge を確実に停止し、テストやアプリ終了時にスレッドが残らないようにしています。
 
 ## 永続化と設定
-- QSettings (`TimelineTool` 名義) で Telemetry とループ設定を保存します。
+- QSettings (`TimelineTool` 名義) で Telemetry とループ設定を保存します。`telemetry/payload_format`（`json` / `binary`）が v0.9.0 で追加されました。
 - プロジェクトファイルは JSON フォーマットで複数トラックのキー列と補間モードを保持し、最初のトラックはレガシー互換用フィールドにも複写されます。
 
 ## 今後の拡張ポイント

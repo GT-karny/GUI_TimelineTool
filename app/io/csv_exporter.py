@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from ..core.sampler import sample_timeline
-from ..core.timeline import Timeline, Track
+from ..core.timeline import Timeline, Track, TrackType
+from ..core.interpolation import evaluate, evaluate_x, evaluate_y
 
 
 @dataclass(frozen=True)
@@ -41,23 +42,39 @@ def build_csv_header(tracks: Sequence[Track]) -> List[str]:
     collisions: Dict[str, int] = {}
     header = ["time_s"]
     for idx, track in enumerate(tracks):
-        header.append(_header_name(track, idx, collisions))
+        base_name = _header_name(track, idx, collisions)
+        if track.track_type == TrackType.VECTOR2:
+            header.append(f"{base_name}.x")
+            header.append(f"{base_name}.y")
+        else:
+            header.append(base_name)
     return header
 
 
 def build_csv_table(tl: Timeline, rate_hz: float = 90.0) -> CsvTable:
     """Sample the timeline and return a table suitable for CSV export."""
 
+    import numpy as np
+    from ..core.sampler import sample_timeline
+    
     ts, samples = sample_timeline(tl, rate_hz)
     tracks = [track for track, _ in samples]
     header = build_csv_header(tracks)
 
-    sample_values: List[Sequence[float]] = [vals for _, vals in samples]
     rows: List[Tuple[str, ...]] = []
     for row_idx, t in enumerate(ts):
         row: List[str] = [f"{float(t):.6f}"]
-        for values in sample_values:
-            row.append(f"{float(values[row_idx]):.6f}")
+        for track, _ in samples:
+            if track.track_type == TrackType.VECTOR2:
+                # Vector2Track: XとYの2列を出力
+                vx = evaluate_x(track, np.array([t]))[0]
+                vy = evaluate_y(track, np.array([t]))[0]
+                row.append(f"{float(vx):.6f}")
+                row.append(f"{float(vy):.6f}")
+            else:
+                # ScalarTrack: 通常の1列を出力
+                v = evaluate(track, np.array([t]))[0]
+                row.append(f"{float(v):.6f}")
         rows.append(tuple(row))
 
     return CsvTable(tuple(header), tuple(rows))

@@ -8,6 +8,7 @@ from ..core.timeline import (
     Keyframe,
     Track,
     Handle,
+    TrackType,
     initialize_handle_positions,
 )
 
@@ -34,6 +35,8 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
         *,
         handle_in: Handle | Sequence[float] | Tuple[float, float] | None = None,
         handle_out: Handle | Sequence[float] | Tuple[float, float] | None = None,
+        vx: float | None = None,
+        vy: float | None = None,
         label: str = "Add Key",
         parent: Optional[QUndoCommand] = None,
     ):
@@ -44,6 +47,8 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
         self.t, self.v = float(t), float(v)
         self._handle_in = handle_in
         self._handle_out = handle_out
+        self._vx = float(vx) if vx is not None else None
+        self._vy = float(vy) if vy is not None else None
 
     def _clone_handle_data(self, data, *, fallback_t: float, fallback_v: float) -> Handle:
         if data is None:
@@ -67,7 +72,13 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
             handle_out = self._clone_handle_data(
                 self._handle_out, fallback_t=self.t, fallback_v=self.v
             )
-            self.k = Keyframe(self.t, self.v, handle_in=handle_in, handle_out=handle_out)
+            self.k = Keyframe(
+                self.t, self.v,
+                handle_in=handle_in,
+                handle_out=handle_out,
+                vx=self._vx,
+                vy=self._vy,
+            )
         appended = False
         if self.k not in track.keys:
             track.keys.append(self.k)
@@ -158,6 +169,7 @@ class MoveHandleCommand(QUndoCommand):
         handle_attr: str,
         before: Tuple[float, float],
         after: Tuple[float, float],
+        component: str | None = None,  # "x" or "y" for vector2 tracks
         label: str = "Move Handle",
         parent: Optional[QUndoCommand] = None,
     ) -> None:
@@ -166,6 +178,7 @@ class MoveHandleCommand(QUndoCommand):
         self.track_id = str(track_id)
         self.key = key
         self._handle_attr = str(handle_attr)
+        self._component = component  # "x", "y", or None
         self.bt, self.bv = before
         self.at, self.av = after
 
@@ -174,8 +187,15 @@ class MoveHandleCommand(QUndoCommand):
         if handle is None:
             handle = Handle(self.key.t, self.key.v)
             setattr(self.key, self._handle_attr, handle)
+        # 時間軸は同期して更新
         handle.t = float(t)
-        handle.v = float(v)
+        # Vector2Trackの場合、componentに応じてvx/vyを更新
+        if self._component == "x":
+            handle.vx = float(v)
+        elif self._component == "y":
+            handle.vy = float(v)
+        else:
+            handle.v = float(v)
 
     def redo(self) -> None:
         self._apply(self.at, self.av)
@@ -221,6 +241,38 @@ class SetKeyValueCommand(QUndoCommand):
 
     def undo(self):
         self.key.set_value(self.old_v)
+
+
+class SetKeyValueXCommand(QUndoCommand):
+    """Vector2TrackのX値を設定するコマンド。"""
+    def __init__(self, key: Keyframe, old_vx: float, new_vx: float, label: str = "Set Value X",
+                 parent: Optional[QUndoCommand] = None):
+        super().__init__(label, parent)
+        self.key = key
+        self.old_vx = float(old_vx)
+        self.new_vx = float(new_vx)
+
+    def redo(self):
+        self.key.set_value_x(self.new_vx)
+
+    def undo(self):
+        self.key.set_value_x(self.old_vx)
+
+
+class SetKeyValueYCommand(QUndoCommand):
+    """Vector2TrackのY値を設定するコマンド。"""
+    def __init__(self, key: Keyframe, old_vy: float, new_vy: float, label: str = "Set Value Y",
+                 parent: Optional[QUndoCommand] = None):
+        super().__init__(label, parent)
+        self.key = key
+        self.old_vy = float(old_vy)
+        self.new_vy = float(new_vy)
+
+    def redo(self):
+        self.key.set_value_y(self.new_vy)
+
+    def undo(self):
+        self.key.set_value_y(self.old_vy)
 
 
 class AddTrackCommand(QUndoCommand):
@@ -277,6 +329,64 @@ class RenameTrackCommand(QUndoCommand):
         if track is None:
             return
         track.name = self.old_name
+
+
+class ConvertTrackTypeCommand(QUndoCommand):
+    """トラックタイプを変換するコマンド（scalar <-> vector2）。"""
+    
+    def __init__(
+        self,
+        tl: Timeline,
+        track_id: str,
+        new_type: TrackType,
+        component: str = "x",  # vector2 -> scalarの場合、xまたはyを選択
+        label: str = "Convert Track Type",
+        parent: Optional[QUndoCommand] = None,
+    ):
+        super().__init__(label, parent)
+        self.tl = tl
+        self.track_id = str(track_id)
+        self.new_type = new_type
+        self.component = component
+        self.old_type: TrackType | None = None
+        self.old_keys: List[Keyframe] = []
+
+    def redo(self):
+        track = _find_track(self.tl, self.track_id)
+        if track is None:
+            return
+        
+        self.old_type = track.track_type
+        # キーをバックアップ
+        self.old_keys = [replace(k) for k in track.keys]
+        
+        if self.new_type == TrackType.VECTOR2:
+            # Scalar -> Vector2: vをvxにコピー、vyは0.0
+            track.track_type = TrackType.VECTOR2
+            for k in track.keys:
+                k.vx = k.v
+                k.vy = 0.0
+        else:
+            # Vector2 -> Scalar: componentに応じてvxまたはvyをvにコピー
+            track.track_type = TrackType.SCALAR
+            for k in track.keys:
+                if self.component == "x":
+                    k.v = k.vx if k.vx is not None else 0.0
+                else:  # component == "y"
+                    k.v = k.vy if k.vy is not None else 0.0
+                k.vx = None
+                k.vy = None
+        
+        track.clamp_times()
+
+    def undo(self):
+        track = _find_track(self.tl, self.track_id)
+        if track is None or self.old_type is None:
+            return
+        
+        track.track_type = self.old_type
+        track.keys = [replace(k) for k in self.old_keys]
+        track.clamp_times()
 
 
 class RemoveTrackCommand(QUndoCommand):

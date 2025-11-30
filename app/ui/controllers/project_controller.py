@@ -54,12 +54,17 @@ class ProjectController:
 
         path = Path(path_str)
         try:
-            timeline, sample_rate = load_project(path)
+            timeline, sample_rate, parameter_study_ranges = load_project(path)
         except Exception as exc:  # pragma: no cover - Qt dialog side effect
             QtWidgets.QMessageBox.critical(self._window, "Load Failed", f"{exc}")
             return
 
         self.apply_project(timeline, sample_rate=sample_rate, path=path)
+        
+        # パラメータスタディウィンドウが開いている場合は値域を復元
+        if parameter_study_ranges and self._window._parameter_study_window is not None:
+            self._window._parameter_study_window.set_ranges(parameter_study_ranges)
+        
         self._window.statusBar().showMessage(f"Loaded project: {path}", 3000)
 
     def on_save_file(self) -> None:
@@ -97,7 +102,17 @@ class ProjectController:
 
     def _save_to_path(self, path: Path) -> bool:
         try:
-            save_project(path, self._window.timeline, self._window.sample_rate_hz)
+            # パラメータスタディウィンドウが開いている場合は値域を取得
+            parameter_study_ranges = None
+            if self._window._parameter_study_window is not None:
+                parameter_study_ranges = self._window._parameter_study_window.get_ranges()
+            
+            save_project(
+                path,
+                self._window.timeline,
+                self._window.sample_rate_hz,
+                parameter_study_ranges=parameter_study_ranges,
+            )
         except Exception as exc:  # pragma: no cover - Qt dialog side effect
             QtWidgets.QMessageBox.critical(self._window, "Save Failed", f"{exc}")
             return False

@@ -25,7 +25,7 @@ def test_project_round_trip_preserves_handles(tmp_path: Path) -> None:
     path = tmp_path / "round_trip.json"
 
     save_project(path, timeline, sample_rate)
-    loaded_timeline, loaded_rate = load_project(path)
+    loaded_timeline, loaded_rate, _ = load_project(path)
 
     assert loaded_rate == sample_rate
 

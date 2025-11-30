@@ -1,6 +1,7 @@
 """Bridge playback ticks to the telemetry sender."""
 from __future__ import annotations
 
+import struct
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -77,6 +78,7 @@ class TelemetryBridge:
         self._playing = False
         self._period_ns = self._compute_period_ns(self.settings.rate_hz)
         self._next_deadline_ns: Optional[int] = None
+        self._force_send = False
         self._running = True
 
         self._thread = threading.Thread(target=self._run, name="TelemetryBridge", daemon=True)
@@ -108,6 +110,8 @@ class TelemetryBridge:
         playhead_ms: int,
         frame_index: int,
         track_snapshots: Iterable[Mapping[str, object]],
+        *,
+        force_send: bool = False,
     ) -> None:
         """Store the most recent telemetry data for background transmission."""
 
@@ -120,22 +124,35 @@ class TelemetryBridge:
         with self._state_lock:
             previous_playing = self._playing
             self._playing = bool(playing)
+            if force_send:
+                self._force_send = True
+            
             if not self._playing:
                 self._next_deadline_ns = None
             elif not previous_playing:
                 self._next_deadline_ns = None
             self._latest_snapshot = snapshot
 
-        if previous_playing != self._playing or not self._playing:
+        if previous_playing != self._playing or not self._playing or force_send:
             self._wakeup.set()
 
     def _run(self) -> None:
         while self._running:
             with self._state_lock:
                 snapshot_available = self._latest_snapshot is not None
-                playing = self._playing and self.settings.enabled and snapshot_available
+                force_send = self._force_send
+                if force_send:
+                    self._force_send = False
+                
+                playing = (
+                    self.settings.enabled
+                    and snapshot_available
+                    and (self._playing or force_send)
+                )
                 period_ns = self._period_ns
                 next_deadline = self._next_deadline_ns
+                payload_format = self.settings.payload_format
+                debug_log = self.settings.debug_log
 
             if not playing:
                 self._wakeup.wait(timeout=0.1)
@@ -144,12 +161,17 @@ class TelemetryBridge:
 
             now_ns = time.perf_counter_ns()
             if next_deadline is None:
-                next_deadline = now_ns + period_ns
-                with self._state_lock:
-                    self._next_deadline_ns = next_deadline
-                continue
+                if force_send:
+                    # Force-send ignores the schedule and fires immediately.
+                    pass
+                else:
+                    # Normal playback should schedule the first deadline before sending.
+                    next_deadline = now_ns + period_ns
+                    with self._state_lock:
+                        self._next_deadline_ns = next_deadline
+                    continue
 
-            if now_ns < next_deadline:
+            if next_deadline is not None and now_ns < next_deadline:
                 remaining_ns = next_deadline - now_ns
                 if remaining_ns > 2_000_000:
                     wait_s = max(0.0, (remaining_ns - 1_000_000) / 1e9)
@@ -165,12 +187,17 @@ class TelemetryBridge:
             if snapshot is None:
                 continue
 
-            payload = self.assembler.build_payload(
-                snapshot.playhead_ms, snapshot.frame_index, snapshot.tracks
+            payload = self._build_payload_bytes(
+                snapshot, payload_format
             )
+            if debug_log:
+                print(f"DEBUG: Sending payload: {len(payload)} bytes")
             self.sender.submit(payload)
 
             sent_ns = time.perf_counter_ns()
+            if next_deadline is None:
+                next_deadline = sent_ns
+            
             next_deadline += period_ns
             if sent_ns >= next_deadline:
                 while next_deadline <= sent_ns:
@@ -178,6 +205,30 @@ class TelemetryBridge:
 
             with self._state_lock:
                 self._next_deadline_ns = next_deadline
+
+    def _build_payload_bytes(
+        self,
+        snapshot: _TelemetrySnapshot,
+        payload_format: str,
+    ) -> bytes:
+        if payload_format == "binary":
+            return self._build_binary_payload(snapshot)
+        return self.assembler.build_payload(
+            snapshot.playhead_ms, snapshot.frame_index, snapshot.tracks
+        )
+
+    @staticmethod
+    def _build_binary_payload(snapshot: _TelemetrySnapshot) -> bytes:
+        buffer = bytearray()
+        pack_float = struct.Struct("<f").pack
+        for track in snapshot.tracks:
+            values = track.get("values", ())
+            for value in values:
+                try:
+                    buffer.extend(pack_float(float(value)))
+                except (TypeError, ValueError):
+                    continue
+        return bytes(buffer)
 
     def shutdown(self) -> None:
         """Shutdown the UDP sender thread."""

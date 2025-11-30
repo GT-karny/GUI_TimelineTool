@@ -13,7 +13,7 @@
 | `app/net/` | 非同期 UDP 送信を担う `UdpSenderService`。 |
 | `app/io/` | CSV エクスポートと JSON プロジェクト入出力。 |
 | `app/tests/` | `pytest` ベースのユニットテストと GUI スモークテスト。 |
-| `tools/` | `udp_recv.py` や `run_checks.sh` などの開発支援スクリプト。 |
+| `tools/` | `udp_recv.py`、`telemetry_binary_receiver.py`、`telemetry_binary_sender.py`、`run_checks.sh` などの開発支援スクリプト。 |
 
 ## セットアップ
 1. 仮想環境を作成して依存パッケージをインストールします。
@@ -37,7 +37,13 @@
 1. `MainWindow` が `Timeline` モデルと `TimelinePlot` を接続し、`MouseController` でキーフレーム操作を受け取ります。
 2. 編集操作は `app/actions/undo_commands.py` の `QUndoCommand` を通じて `QUndoStack` に積まれ、Undo/Redo に対応します。
 3. `PlaybackController` が Qt の `QTimer` で再生ヘッドを進め、描画更新と Telemetry 送信をトリガします。
-4. Telemetry が有効な場合、`TelemetryBridge` が最新スナップショットを `TelemetryAssembler` で JSON 化し、`UdpSenderService` が非同期送信します。
+4. Telemetry が有効な場合、`TelemetryBridge` が最新スナップショットを JSON (`TelemetryAssembler`) もしくはバイナリ Float32 に変換し、`UdpSenderService` が非同期送信します。形式は Telemetry メニューまたは QSettings (`telemetry/payload_format`) で管理されます。
+
+## Telemetry メニュー拡張 (v0.9.0)
+- メニューバーに **Telemetry** を追加し、以下を切り替え可能にしました。
+  - `Send JSON payloads` / `Send binary float payloads`
+  - `Debug Log`
+- 選択結果は `TelemetryController` → `TelemetryBridge` に伝播し、QSettings へ永続化されます。UI から設定を変更した場合も `_sync_telemetry_menu_state()` でメニューの状態を追従させています。
 
 ## テスト
 - ユニットテストは `pytest` を用いて `app/tests/` から実行します。

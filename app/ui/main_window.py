@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional, Set, Tuple
-from PySide6 import QtWidgets, QtCore
-from PySide6.QtGui import QKeySequence, QUndoCommand, QUndoStack
+from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6.QtGui import QActionGroup, QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
 from ..core.timeline import (
@@ -12,9 +12,10 @@ from ..core.timeline import (
     Keyframe,
     InterpMode,
     Track,
+    TrackType,
     initialize_handle_positions,
 )
-from ..core.interpolation import evaluate
+from ..core.interpolation import evaluate, evaluate_x, evaluate_y
 from ..services.export_dialog import export_timeline_csv_via_dialog
 from .controllers import ProjectController, TelemetryController
 from .track_container import TrackContainer
@@ -22,7 +23,10 @@ from .track_row import TrackRow
 from .toolbar import TimelineToolbar
 from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
+from .vector2_editor import Vector2EditorWindow
 from .telemetry_panel import TelemetryPanel
+from .parameter_study_window import ParameterStudyWindow
+from ..telemetry.settings import TelemetrySettings
 
 from ..interaction.selection import SelectionManager, SelectedKey
 from ..interaction.pos_provider import SingleTrackPosProvider
@@ -40,6 +44,9 @@ from ..actions.undo_commands import (
     RenameTrackCommand,
     SetKeyTimeCommand,
     SetKeyValueCommand,
+    SetKeyValueXCommand,
+    SetKeyValueYCommand,
+    ConvertTrackTypeCommand,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._key_edit: Optional[KeyEditService] = None
         self.mouse: Optional[MouseController] = None
         self.plotw: Optional[TimelinePlot] = None
+        self._parameter_study_window: Optional[ParameterStudyWindow] = None
 
         self._init_model_state()
         self._init_toolbar()
@@ -181,6 +189,7 @@ class MainWindow(QtWidgets.QMainWindow):
             telemetry_bridge=self.telemetry_bridge,
             telemetry_panel=self.telemetry_panel,
             timeline_getter=lambda: self.timeline,
+            parent=self,
         )
         self._build_menu()
 
@@ -222,17 +231,23 @@ class MainWindow(QtWidgets.QMainWindow):
             on_changed=self._refresh_view,
             set_playhead=self.playback.set_playhead,
             key_edit=self._key_edit,
+            on_alt_click_key=self._on_alt_click_key,
         )
 
     def _connect_track_container_signals(self) -> None:
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
+        self.track_container.request_remove_selected_tracks.connect(self._on_request_remove_selected_tracks)
+        self.track_container.request_set_label_x.connect(self._on_request_set_label_x)
+        self.track_container.request_set_label_y.connect(self._on_request_set_label_y)
         self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
     def _connect_inspector_signals(self) -> None:
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
+        self.inspector.sig_value_x_edited.connect(self._on_inspector_value_x)
+        self.inspector.sig_value_y_edited.connect(self._on_inspector_value_y)
 
     def _connect_toolbar_signals(self) -> None:
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
@@ -254,8 +269,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _connect_telemetry_signals(self) -> None:
         self.telemetry_panel.settings_changed.connect(
-            self.telemetry_controller.on_settings_changed
+            self._on_telemetry_settings_changed
         )
+
+    def _on_telemetry_settings_changed(self, settings: TelemetrySettings) -> None:
+        self.telemetry_controller.on_settings_changed(settings)
+        self._sync_telemetry_menu_state()
 
     def _on_track_rows_changed(self) -> None:
         active = self.track_container.active_row or self.track_container.primary_row
@@ -267,7 +286,50 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
 
     def _on_request_add_track(self) -> None:
-        cmd = AddTrackCommand(self.timeline)
+        """トラック追加時にタイプを選択するダイアログを表示。"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox, QButtonGroup, QRadioButton
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Track")
+        dialog.setMinimumWidth(250)
+        
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QtWidgets.QLabel("Select track type:"))
+        
+        button_group = QButtonGroup(dialog)
+        scalar_radio = QRadioButton("Scalar (1D)")
+        vector2_radio = QRadioButton("Vector2 (2D)")
+        scalar_radio.setChecked(True)  # デフォルトはScalar
+        
+        button_group.addButton(scalar_radio, 0)
+        button_group.addButton(vector2_radio, 1)
+        
+        layout.addWidget(scalar_radio)
+        layout.addWidget(vector2_radio)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # 選択されたタイプに応じてTrackを作成
+        if vector2_radio.isChecked():
+            # Vector2Trackを作成
+            new_track = Track(track_type=TrackType.VECTOR2)
+            # デフォルトキーをVector2用に設定
+            new_track.keys = [
+                Keyframe(0.0, 0.0, vx=0.0, vy=0.0),
+                Keyframe(5.0, 0.0, vx=0.0, vy=0.0),
+            ]
+        else:
+            # ScalarTrackを作成（デフォルト）
+            new_track = Track(track_type=TrackType.SCALAR)
+        
+        cmd = AddTrackCommand(self.timeline, track=new_track)
         self.undo.push(cmd)
         self._refresh_view()
 
@@ -304,6 +366,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.push(cmd)
         self._refresh_view()
 
+    def _on_request_remove_selected_tracks(self) -> None:
+        """選択中のトラックを削除"""
+        selected_ids = self.track_container.selected_tracks
+        if not selected_ids:
+            return
+        
+        # 最後のトラックは削除できない
+        if len(self.timeline.tracks) <= len(selected_ids):
+            return
+        
+        # 選択中のトラックを削除（逆順で削除してインデックスずれを防ぐ）
+        for track_id in sorted(selected_ids, reverse=True, key=lambda tid: next(
+            (i for i, t in enumerate(self.timeline.tracks) if t.track_id == tid), -1
+        )):
+            cmd = RemoveTrackCommand(self.timeline, track_id)
+            self.undo.push(cmd)
+        
+        # 選択をクリア
+        self.track_container.clear_selection()
+        self._refresh_view()
+
+    def _on_request_set_label_x(self, track_id: str, label_x: str) -> None:
+        """Xラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_x
+        track.label_x = label_x
+        # Undo対応は必要に応じて追加（今回は簡易実装）
+
+    def _on_request_set_label_y(self, track_id: str, label_y: str) -> None:
+        """Yラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_y
+        track.label_y = label_y
+        # Undo対応は必要に応じて追加（今回は簡易実装）
+
     def _on_request_rename_track(self, track_id: str, new_name: str) -> None:
         track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
         if track is None:
@@ -332,6 +433,50 @@ class MainWindow(QtWidgets.QMainWindow):
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
         self.toolbar.set_loop(self.playback.loop_enabled)
+        
+        # キーボードショートカットの設定
+        self._setup_keyboard_shortcuts()
+
+    def _setup_keyboard_shortcuts(self) -> None:
+        """キーボードショートカットを設定"""
+        # Deleteキー: 選択中のキーフレームを削除
+        delete_shortcut = QtGui.QShortcut(QKeySequence(QtCore.Qt.Key.Key_Delete), self)
+        delete_shortcut.activated.connect(self._on_delete_key_pressed)
+        
+        # Ctrl+C: 選択中のキーフレームの値をコピー
+        copy_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Copy, self)
+        copy_shortcut.activated.connect(self._on_copy_key_pressed)
+        
+        # Ctrl+V: コピー中の値をマウスカーソル位置にペースト
+        paste_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Paste, self)
+        paste_shortcut.activated.connect(self._on_paste_key_pressed)
+
+    def _on_delete_key_pressed(self) -> None:
+        """Deleteキーが押された時の処理"""
+        if self._key_edit is None:
+            return
+        if self._key_edit.delete_selected_keys():
+            self._refresh_view()
+
+    def _on_copy_key_pressed(self) -> None:
+        """Ctrl+Cが押された時の処理"""
+        if self._key_edit is None:
+            return
+        self._key_edit.copy_selected_keys()
+
+    def _on_paste_key_pressed(self) -> None:
+        """Ctrl+Vが押された時の処理"""
+        if self._key_edit is None or self.plotw is None:
+            return
+        
+        # マウスカーソル位置を取得
+        t = self.plotw.get_mouse_time()
+        if t is None:
+            # マウスカーソルがプロット外の場合はプレイヘッド位置を使用
+            t = self.playback.playhead_s
+        
+        if self._key_edit.paste_at(t) is not None:
+            self._refresh_view()
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
@@ -367,16 +512,99 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
-        # 仕様：補間値を初期値に
-        track = self._current_track()
-        track_id = track.track_id
-        v = float(evaluate(track, np.array([t]))[0])
-        cmd = AddKeyCommand(self.timeline, track_id, t, v)
-        self.undo.push(cmd)
-        # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
-        kf = cmd.k
-        if kf is not None:
-            self.sel.set_single(track_id, id(kf))
+        if t < 0.0:
+            t = 0.0
+        
+        # 複数のキーを一度に追加するための親コマンド
+        # 親コマンドに明示的にredo()を実装して、子コマンドのredo()が確実に呼ばれるようにする
+        class AddKeysAtPlayheadCommand(QUndoCommand):
+            def __init__(self, label: str = "Add Keys at Playhead"):
+                super().__init__(label)
+                self._child_commands: List[AddKeyCommand] = []
+            
+            def add_child(self, cmd: AddKeyCommand) -> None:
+                """子コマンドを追加"""
+                self._child_commands.append(cmd)
+                cmd.setParent(self)
+            
+            def redo(self) -> None:
+                """すべての子コマンドのredo()を実行"""
+                for cmd in self._child_commands:
+                    cmd.redo()
+            
+            def undo(self) -> None:
+                """すべての子コマンドのundo()を逆順で実行"""
+                for cmd in reversed(self._child_commands):
+                    cmd.undo()
+        
+        root_cmd = AddKeysAtPlayheadCommand("Add Keys at Playhead")
+        first_cmd = None
+        track_count = 0
+        cmd_count = 0
+        
+        # すべてのトラックをループしてキーを追加
+        tracks_list = list(self.timeline.iter_tracks())
+        logger.debug("Add Keys at Playhead: Found %d tracks", len(tracks_list))
+        
+        for track in tracks_list:
+            track_count += 1
+            try:
+                logger.debug("Processing track %d: id=%s, type=%s, name=%s", 
+                           track_count, track.track_id, track.track_type, track.name)
+                
+                if track.track_type == TrackType.SCALAR:
+                    # 補間値を初期値に
+                    v = float(evaluate(track, np.array([t]))[0])
+                    logger.debug("  SCALAR track: evaluated value = %f at t = %f", v, t)
+                    cmd = AddKeyCommand(
+                        self.timeline,
+                        track.track_id,
+                        t,
+                        v,
+                        label=f"Add Key: {track.name}",
+                    )
+                    root_cmd.add_child(cmd)
+                    cmd_count += 1
+                elif track.track_type == TrackType.VECTOR2:
+                    # X/Y成分を取得
+                    vx = float(evaluate_x(track, np.array([t]))[0])
+                    vy = float(evaluate_y(track, np.array([t]))[0])
+                    logger.debug("  VECTOR2 track: evaluated vx = %f, vy = %f at t = %f", vx, vy, t)
+                    cmd = AddKeyCommand(
+                        self.timeline,
+                        track.track_id,
+                        t,
+                        0.0,  # vは0.0（Vector2Trackでは使用しない）
+                        vx=vx,
+                        vy=vy,
+                        label=f"Add Key: {track.name}",
+                    )
+                    root_cmd.add_child(cmd)
+                    cmd_count += 1
+                else:
+                    logger.warning("  Unknown track type: %s, skipping", track.track_type)
+                    continue
+                
+                # 最初のコマンドを保存
+                if first_cmd is None:
+                    first_cmd = cmd
+                    logger.debug("  Set as first command")
+            except Exception as e:
+                logger.exception("Failed to create AddKeyCommand for track %s: %s", track.track_id, e)
+                continue
+        
+        logger.debug("Add Keys at Playhead: Processed %d tracks, created %d commands, root_cmd.childCount() = %d",
+                    track_count, cmd_count, len(root_cmd._child_commands))
+        
+        if len(root_cmd._child_commands) > 0:
+            self.undo.push(root_cmd)
+            logger.debug("Pushed root_cmd to undo stack, first_cmd.k = %s", first_cmd.k if first_cmd else None)
+            # 最初のトラックのキーを選択（push()の後、redo()が呼ばれてkが設定されている）
+            if first_cmd is not None and first_cmd.k is not None:
+                self.sel.set_single(first_cmd.track_id, id(first_cmd.k))
+                logger.debug("Selected first key: track_id=%s, key_id=%d", first_cmd.track_id, id(first_cmd.k))
+        else:
+            logger.warning("Add Keys at Playhead: No commands to push (childCount = 0)")
         self._refresh_view()
 
     def _on_delete_selected(self):
@@ -446,6 +674,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.push(SetKeyValueCommand(k, old_v=k.v, new_v=v_new))
         self._refresh_view()
 
+    def _on_inspector_value_x(self, vx_new: float):
+        """Vector2TrackのX値を更新。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, k = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        vx_new = float(vx_new)
+        vx_old = k.vx if k.vx is not None else 0.0
+        if abs(vx_old - vx_new) < 1e-12:
+            return
+        self.undo.push(SetKeyValueXCommand(k, old_vx=vx_old, new_vx=vx_new))
+        self._refresh_view()
+
+    def _on_inspector_value_y(self, vy_new: float):
+        """Vector2TrackのY値を更新。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, k = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        vy_new = float(vy_new)
+        vy_old = k.vy if k.vy is not None else 0.0
+        if abs(vy_old - vy_new) < 1e-12:
+            return
+        self.undo.push(SetKeyValueYCommand(k, old_vy=vy_old, new_vy=vy_new))
+        self._refresh_view()
+
+    def _on_alt_click_key(self) -> None:
+        """Alt+クリックで2D編集ウィンドウを開く。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, key = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        
+        # 2D編集ウィンドウを開く前にマウスのクリック状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        
+        vx = key.vx if key.vx is not None else 0.0
+        vy = key.vy if key.vy is not None else 0.0
+        
+        def on_update(new_vx: float, new_vy: float) -> None:
+            """2D編集ウィンドウで値が更新されたときのコールバック。"""
+            key.set_value_vector2(new_vx, new_vy)
+            self._refresh_view()
+        
+        editor = Vector2EditorWindow(track, key, on_update, parent=self)
+        editor.exec()
+        
+        # 2D編集ウィンドウを閉じた後も状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        self._refresh_view()
+
     # -------------------- Playback callbacks --------------------
     def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
         self.plotw.set_playhead(playhead_s)
@@ -477,7 +764,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if len(resolved) == 1:
             track, key = resolved[0]
-            self.inspector.set_single_values(track.name, key.t, key.v)
+            if track.track_type == TrackType.VECTOR2:
+                vx = key.vx if key.vx is not None else 0.0
+                vy = key.vy if key.vy is not None else 0.0
+                self.inspector.set_single_values(track.name, key.t, key.v, is_vector2=True, vx=vx, vy=vy)
+            else:
+                self.inspector.set_single_values(track.name, key.t, key.v, is_vector2=False)
         else:
             names = [track.name for track, _ in resolved]
             self.inspector.set_no_or_multi(names)
@@ -560,3 +852,84 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
+
+        self._build_tools_menu()
+        self._build_telemetry_menu()
+
+    def _build_telemetry_menu(self) -> None:
+        menu = self.menuBar().addMenu("Telemetry")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        self.act_payload_json = menu.addAction("Send JSON payloads")
+        self.act_payload_json.setCheckable(True)
+        self.act_payload_json.triggered.connect(
+            lambda checked: self._on_payload_format_selected("json", checked)
+        )
+        group.addAction(self.act_payload_json)
+
+        self.act_payload_binary = menu.addAction("Send binary float payloads")
+        self.act_payload_binary.setCheckable(True)
+        self.act_payload_binary.triggered.connect(
+            lambda checked: self._on_payload_format_selected("binary", checked)
+        )
+        group.addAction(self.act_payload_binary)
+
+        menu.addSeparator()
+        self.act_debug_log = menu.addAction("Debug Log")
+        self.act_debug_log.setCheckable(True)
+        self.act_debug_log.toggled.connect(self._on_debug_log_toggled)
+
+        self._telemetry_format_actions = {
+            "json": self.act_payload_json,
+            "binary": self.act_payload_binary,
+        }
+        self._sync_telemetry_menu_state()
+
+    def _sync_telemetry_menu_state(self) -> None:
+        current_format = self.telemetry_controller.get_payload_format()
+        for fmt, action in self._telemetry_format_actions.items():
+            block = action.blockSignals
+            block(True)
+            action.setChecked(fmt == current_format)
+            block(False)
+
+        self.act_debug_log.blockSignals(True)
+        self.act_debug_log.setChecked(self.telemetry_controller.get_debug_log_state())
+        self.act_debug_log.blockSignals(False)
+
+    def _on_payload_format_selected(self, fmt: str, checked: bool) -> None:
+        if not checked:
+            return
+        self.telemetry_controller.set_payload_format(fmt)
+        self._sync_telemetry_menu_state()
+
+    def _on_debug_log_toggled(self, checked: bool) -> None:
+        self.telemetry_controller.set_debug_log(checked)
+        self._sync_telemetry_menu_state()
+
+    def _build_tools_menu(self) -> None:
+        """Toolsメニューを構築。"""
+        menu = self.menuBar().addMenu("&Tools")
+
+        self.act_parameter_study = menu.addAction("Parameter Study Mode")
+        self.act_parameter_study.triggered.connect(self._on_parameter_study_mode)
+        self.addAction(self.act_parameter_study)
+
+    def _on_parameter_study_mode(self) -> None:
+        """パラメータスタディモードウィンドウを開く。"""
+        if self._parameter_study_window is None or not self._parameter_study_window.isVisible():
+            self._parameter_study_window = ParameterStudyWindow(
+                timeline=self.timeline,
+                telemetry_bridge=self.telemetry_bridge,
+                parent=self,
+                playhead_getter=lambda: self.playback.playhead,
+                undo_stack=self.undo,
+            )
+            self._parameter_study_window.destroyed.connect(
+                lambda: setattr(self, "_parameter_study_window", None)
+            )
+            self._parameter_study_window.show()
+        else:
+            self._parameter_study_window.raise_()
+            self._parameter_study_window.activateWindow()
