@@ -56,6 +56,7 @@ class MouseController(QtCore.QObject):
         on_changed: Callable[[], None],
         set_playhead: Callable[[float], None],
         key_edit: KeyEditService,
+        on_alt_click_key: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
         self.plot = plot_widget
@@ -64,6 +65,7 @@ class MouseController(QtCore.QObject):
         self.provider = pos_provider
         self.on_changed = on_changed
         self.set_playhead = set_playhead
+        self.on_alt_click_key = on_alt_click_key
 
         # 状態
         self._left_down = False
@@ -151,6 +153,9 @@ class MouseController(QtCore.QObject):
     def _is_shift(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         return bool(ev.modifiers() & QtCore.Qt.ShiftModifier)
 
+    def _is_alt(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
+        return bool(ev.modifiers() & QtCore.Qt.AltModifier)
+
     # ---- Event handlers -------------------------------------------------
     def _handle_left_button_press(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         """Handle left button press by selecting keys or starting marquee."""
@@ -160,6 +165,11 @@ class MouseController(QtCore.QObject):
         self._left_dragging = False
         hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=10)
         if hit is not None:
+            # Alt+クリックの場合は2D編集ウィンドウを開く
+            if self._is_alt(ev) and self.on_alt_click_key is not None:
+                self.on_alt_click_key()
+                return True
+            
             if self._is_shift(ev):
                 self.sel.add_point(hit)
             else:
@@ -226,6 +236,13 @@ class MouseController(QtCore.QObject):
         self._left_dragging = False
         self.on_changed()
         return True
+
+    def reset_drag_state(self) -> None:
+        """ドラッグ状態をリセット（2D編集ウィンドウを開く際などに使用）。"""
+        self._left_down = False
+        self._left_press_scene = None
+        self._left_dragging = False
+        self.key_edit.commit_drag()
 
     def _handle_left_button_double_click(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         """Handle double click by adding a key at the cursor position."""

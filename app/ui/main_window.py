@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional, Set, Tuple
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtGui import QActionGroup, QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
@@ -12,6 +12,7 @@ from ..core.timeline import (
     Keyframe,
     InterpMode,
     Track,
+    TrackType,
     initialize_handle_positions,
 )
 from ..core.interpolation import evaluate
@@ -22,6 +23,7 @@ from .track_row import TrackRow
 from .toolbar import TimelineToolbar
 from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
+from .vector2_editor import Vector2EditorWindow
 from .telemetry_panel import TelemetryPanel
 from ..telemetry.settings import TelemetrySettings
 
@@ -41,6 +43,9 @@ from ..actions.undo_commands import (
     RenameTrackCommand,
     SetKeyTimeCommand,
     SetKeyValueCommand,
+    SetKeyValueXCommand,
+    SetKeyValueYCommand,
+    ConvertTrackTypeCommand,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,17 +229,23 @@ class MainWindow(QtWidgets.QMainWindow):
             on_changed=self._refresh_view,
             set_playhead=self.playback.set_playhead,
             key_edit=self._key_edit,
+            on_alt_click_key=self._on_alt_click_key,
         )
 
     def _connect_track_container_signals(self) -> None:
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
+        self.track_container.request_remove_selected_tracks.connect(self._on_request_remove_selected_tracks)
+        self.track_container.request_set_label_x.connect(self._on_request_set_label_x)
+        self.track_container.request_set_label_y.connect(self._on_request_set_label_y)
         self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
     def _connect_inspector_signals(self) -> None:
         self.inspector.sig_time_edited.connect(self._on_inspector_time)
         self.inspector.sig_value_edited.connect(self._on_inspector_value)
+        self.inspector.sig_value_x_edited.connect(self._on_inspector_value_x)
+        self.inspector.sig_value_y_edited.connect(self._on_inspector_value_y)
 
     def _connect_toolbar_signals(self) -> None:
         self.toolbar.sig_interp_changed.connect(self._on_interp_changed)
@@ -273,7 +284,50 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
 
     def _on_request_add_track(self) -> None:
-        cmd = AddTrackCommand(self.timeline)
+        """トラック追加時にタイプを選択するダイアログを表示。"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox, QButtonGroup, QRadioButton
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Track")
+        dialog.setMinimumWidth(250)
+        
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QtWidgets.QLabel("Select track type:"))
+        
+        button_group = QButtonGroup(dialog)
+        scalar_radio = QRadioButton("Scalar (1D)")
+        vector2_radio = QRadioButton("Vector2 (2D)")
+        scalar_radio.setChecked(True)  # デフォルトはScalar
+        
+        button_group.addButton(scalar_radio, 0)
+        button_group.addButton(vector2_radio, 1)
+        
+        layout.addWidget(scalar_radio)
+        layout.addWidget(vector2_radio)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # 選択されたタイプに応じてTrackを作成
+        if vector2_radio.isChecked():
+            # Vector2Trackを作成
+            new_track = Track(track_type=TrackType.VECTOR2)
+            # デフォルトキーをVector2用に設定
+            new_track.keys = [
+                Keyframe(0.0, 0.0, vx=0.0, vy=0.0),
+                Keyframe(5.0, 0.0, vx=0.0, vy=0.0),
+            ]
+        else:
+            # ScalarTrackを作成（デフォルト）
+            new_track = Track(track_type=TrackType.SCALAR)
+        
+        cmd = AddTrackCommand(self.timeline, track=new_track)
         self.undo.push(cmd)
         self._refresh_view()
 
@@ -310,6 +364,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.push(cmd)
         self._refresh_view()
 
+    def _on_request_remove_selected_tracks(self) -> None:
+        """選択中のトラックを削除"""
+        selected_ids = self.track_container.selected_tracks
+        if not selected_ids:
+            return
+        
+        # 最後のトラックは削除できない
+        if len(self.timeline.tracks) <= len(selected_ids):
+            return
+        
+        # 選択中のトラックを削除（逆順で削除してインデックスずれを防ぐ）
+        for track_id in sorted(selected_ids, reverse=True, key=lambda tid: next(
+            (i for i, t in enumerate(self.timeline.tracks) if t.track_id == tid), -1
+        )):
+            cmd = RemoveTrackCommand(self.timeline, track_id)
+            self.undo.push(cmd)
+        
+        # 選択をクリア
+        self.track_container.clear_selection()
+        self._refresh_view()
+
+    def _on_request_set_label_x(self, track_id: str, label_x: str) -> None:
+        """Xラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_x
+        track.label_x = label_x
+        # Undo対応は必要に応じて追加（今回は簡易実装）
+
+    def _on_request_set_label_y(self, track_id: str, label_y: str) -> None:
+        """Yラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_y
+        track.label_y = label_y
+        # Undo対応は必要に応じて追加（今回は簡易実装）
+
     def _on_request_rename_track(self, track_id: str, new_name: str) -> None:
         track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
         if track is None:
@@ -338,6 +431,50 @@ class MainWindow(QtWidgets.QMainWindow):
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
         self.toolbar.set_loop(self.playback.loop_enabled)
+        
+        # キーボードショートカットの設定
+        self._setup_keyboard_shortcuts()
+
+    def _setup_keyboard_shortcuts(self) -> None:
+        """キーボードショートカットを設定"""
+        # Deleteキー: 選択中のキーフレームを削除
+        delete_shortcut = QtGui.QShortcut(QKeySequence(QtCore.Qt.Key.Key_Delete), self)
+        delete_shortcut.activated.connect(self._on_delete_key_pressed)
+        
+        # Ctrl+C: 選択中のキーフレームの値をコピー
+        copy_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Copy, self)
+        copy_shortcut.activated.connect(self._on_copy_key_pressed)
+        
+        # Ctrl+V: コピー中の値をマウスカーソル位置にペースト
+        paste_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Paste, self)
+        paste_shortcut.activated.connect(self._on_paste_key_pressed)
+
+    def _on_delete_key_pressed(self) -> None:
+        """Deleteキーが押された時の処理"""
+        if self._key_edit is None:
+            return
+        if self._key_edit.delete_selected_keys():
+            self._refresh_view()
+
+    def _on_copy_key_pressed(self) -> None:
+        """Ctrl+Cが押された時の処理"""
+        if self._key_edit is None:
+            return
+        self._key_edit.copy_selected_keys()
+
+    def _on_paste_key_pressed(self) -> None:
+        """Ctrl+Vが押された時の処理"""
+        if self._key_edit is None or self.plotw is None:
+            return
+        
+        # マウスカーソル位置を取得
+        t = self.plotw.get_mouse_time()
+        if t is None:
+            # マウスカーソルがプロット外の場合はプレイヘッド位置を使用
+            t = self.playback.playhead_s
+        
+        if self._key_edit.paste_at(t) is not None:
+            self._refresh_view()
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):
@@ -452,6 +589,65 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.push(SetKeyValueCommand(k, old_v=k.v, new_v=v_new))
         self._refresh_view()
 
+    def _on_inspector_value_x(self, vx_new: float):
+        """Vector2TrackのX値を更新。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, k = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        vx_new = float(vx_new)
+        vx_old = k.vx if k.vx is not None else 0.0
+        if abs(vx_old - vx_new) < 1e-12:
+            return
+        self.undo.push(SetKeyValueXCommand(k, old_vx=vx_old, new_vx=vx_new))
+        self._refresh_view()
+
+    def _on_inspector_value_y(self, vy_new: float):
+        """Vector2TrackのY値を更新。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, k = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        vy_new = float(vy_new)
+        vy_old = k.vy if k.vy is not None else 0.0
+        if abs(vy_old - vy_new) < 1e-12:
+            return
+        self.undo.push(SetKeyValueYCommand(k, old_vy=vy_old, new_vy=vy_new))
+        self._refresh_view()
+
+    def _on_alt_click_key(self) -> None:
+        """Alt+クリックで2D編集ウィンドウを開く。"""
+        pairs = self._resolved_selection()
+        if len(pairs) != 1:
+            return
+        track, key = pairs[0]
+        if track.track_type != TrackType.VECTOR2:
+            return
+        
+        # 2D編集ウィンドウを開く前にマウスのクリック状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        
+        vx = key.vx if key.vx is not None else 0.0
+        vy = key.vy if key.vy is not None else 0.0
+        
+        def on_update(new_vx: float, new_vy: float) -> None:
+            """2D編集ウィンドウで値が更新されたときのコールバック。"""
+            key.set_value_vector2(new_vx, new_vy)
+            self._refresh_view()
+        
+        editor = Vector2EditorWindow(track, key, on_update, parent=self)
+        editor.exec()
+        
+        # 2D編集ウィンドウを閉じた後も状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        self._refresh_view()
+
     # -------------------- Playback callbacks --------------------
     def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
         self.plotw.set_playhead(playhead_s)
@@ -483,7 +679,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if len(resolved) == 1:
             track, key = resolved[0]
-            self.inspector.set_single_values(track.name, key.t, key.v)
+            if track.track_type == TrackType.VECTOR2:
+                vx = key.vx if key.vx is not None else 0.0
+                vy = key.vy if key.vy is not None else 0.0
+                self.inspector.set_single_values(track.name, key.t, key.v, is_vector2=True, vx=vx, vy=vy)
+            else:
+                self.inspector.set_single_values(track.name, key.t, key.v, is_vector2=False)
         else:
             names = [track.name for track, _ in resolved]
             self.inspector.set_no_or_multi(names)

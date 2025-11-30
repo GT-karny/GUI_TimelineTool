@@ -6,8 +6,8 @@ from typing import Iterable, List
 
 import numpy as np
 
-from ..core.interpolation import evaluate
-from ..core.timeline import Timeline, Track
+from ..core.interpolation import evaluate, evaluate_x, evaluate_y
+from ..core.timeline import Timeline, Track, TrackType
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,17 @@ class TrackTelemetrySnapshot:
 
 def _sample_track(track: Track, playhead_s: float) -> TrackTelemetrySnapshot:
     ts = np.array([float(playhead_s)], dtype=float)
-    values = evaluate(track, ts)
+    
+    # Vector2Trackの場合はX/Y両方を取得
+    if getattr(track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2:
+        vx_values = evaluate_x(track, ts)
+        vy_values = evaluate_y(track, ts)
+        # [vx, vy]の順で値を結合
+        values = np.concatenate([vx_values, vy_values])
+    else:
+        # ScalarTrackの場合は従来通り
+        values = evaluate(track, ts)
+    
     return TrackTelemetrySnapshot(
         name=track.name,
         values=tuple(float(v) for v in values.tolist()),
