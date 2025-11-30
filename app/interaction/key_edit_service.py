@@ -15,7 +15,7 @@ from ..actions.undo_commands import (
     MoveHandleCommand,
     MoveKeyCommand,
 )
-from ..core.timeline import Handle, Keyframe, Timeline, Track, initialize_handle_positions
+from ..core.timeline import Handle, Keyframe, Timeline, Track, TrackType, initialize_handle_positions
 from .selection import KeyPoint, KeyPosProvider, SelectedKey, SelectionManager
 
 
@@ -102,8 +102,14 @@ class KeyEditService:
 
         if key_point.component == "key":
             new_t = float(max(0.0, new_t))
-            key.translate(new_t - key.t, new_v - key.v)
             track = self._track_for_id(key_point.track_id)
+            is_vector2 = track is not None and getattr(track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
+            if is_vector2:
+                # Vector2Trackの場合、時間軸のみを変更（値は変更しない）
+                key.set_time(new_t)
+            else:
+                # ScalarTrackの場合、従来通り
+                key.translate(new_t - key.t, new_v - key.v)
             if track is not None:
                 track.clamp_times()
         else:
