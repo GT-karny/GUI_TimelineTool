@@ -16,6 +16,7 @@ class TelemetryPanel(QtWidgets.QGroupBox):
         self._ui_updating = False
         self._session_placeholder: str | None = None
         self._current_payload_format: str = "json"
+        self._current_debug_log: bool = False
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)

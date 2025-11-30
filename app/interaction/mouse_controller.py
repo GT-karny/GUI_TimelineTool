@@ -71,6 +71,7 @@ class MouseController(QtCore.QObject):
         self._left_down = False
         # 左ボタンドラッグ
         self._left_press_scene: Optional[QPointF] = None
+        self._left_press_hit: Optional[SelectedKey] = None  # 押下時にヒットしたポイントを保存
         self._left_drag_thresh_px = 5
         self._left_dragging = False
         # 中ボタンパン
@@ -164,6 +165,8 @@ class MouseController(QtCore.QObject):
         self._left_press_scene = ev.scenePos()
         self._left_dragging = False
         hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=10)
+        # 押下時にヒットしたポイントを保存（ドラッグ開始時に使用）
+        self._left_press_hit = hit
         if hit is not None:
             # Alt+クリックの場合は2D編集ウィンドウを開く
             if self._is_alt(ev) and self.on_alt_click_key is not None:
@@ -210,10 +213,10 @@ class MouseController(QtCore.QObject):
             # 移動距離が閾値を超えた場合、ドラッグを開始
             if d > self._left_drag_thresh_px:
                 self._left_dragging = True
-                # 押下時にヒットしたキーを取得してドラッグを開始
-                hit = self.sel.hit_test_nearest(self._left_press_scene, px_thresh=10)
-                if hit is not None:
-                    self.key_edit.begin_drag(hit)
+                # 押下時に選択されたポイントを使用してドラッグを開始
+                # （再ヒットテストではなく、既に選択されているポイントを使用）
+                if self._left_press_hit is not None:
+                    self.key_edit.begin_drag(self._left_press_hit)
                     if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
                         self.on_changed()
                         return True
