@@ -235,6 +235,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _connect_track_container_signals(self) -> None:
         self.track_container.request_add_track.connect(self._on_request_add_track)
         self.track_container.request_remove_track.connect(self._on_request_remove_track)
+        self.track_container.request_remove_selected_tracks.connect(self._on_request_remove_selected_tracks)
+        self.track_container.request_set_label_x.connect(self._on_request_set_label_x)
+        self.track_container.request_set_label_y.connect(self._on_request_set_label_y)
         self.track_container.request_rename_track.connect(self._on_request_rename_track)
         self.track_container.active_row_changed.connect(self._on_active_row_changed)
 
@@ -360,6 +363,45 @@ class MainWindow(QtWidgets.QMainWindow):
         cmd = RemoveTrackCommand(self.timeline, track_id)
         self.undo.push(cmd)
         self._refresh_view()
+
+    def _on_request_remove_selected_tracks(self) -> None:
+        """選択中のトラックを削除"""
+        selected_ids = self.track_container.selected_tracks
+        if not selected_ids:
+            return
+        
+        # 最後のトラックは削除できない
+        if len(self.timeline.tracks) <= len(selected_ids):
+            return
+        
+        # 選択中のトラックを削除（逆順で削除してインデックスずれを防ぐ）
+        for track_id in sorted(selected_ids, reverse=True, key=lambda tid: next(
+            (i for i, t in enumerate(self.timeline.tracks) if t.track_id == tid), -1
+        )):
+            cmd = RemoveTrackCommand(self.timeline, track_id)
+            self.undo.push(cmd)
+        
+        # 選択をクリア
+        self.track_container.clear_selection()
+        self._refresh_view()
+
+    def _on_request_set_label_x(self, track_id: str, label_x: str) -> None:
+        """Xラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_x
+        track.label_x = label_x
+        # Undo対応は必要に応じて追加（今回は簡易実装）
+
+    def _on_request_set_label_y(self, track_id: str, label_y: str) -> None:
+        """Yラベルを設定"""
+        track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)
+        if track is None:
+            return
+        old_label = track.label_y
+        track.label_y = label_y
+        # Undo対応は必要に応じて追加（今回は簡易実装）
 
     def _on_request_rename_track(self, track_id: str, new_name: str) -> None:
         track = next((t for t in self.timeline.iter_tracks() if t.track_id == track_id), None)

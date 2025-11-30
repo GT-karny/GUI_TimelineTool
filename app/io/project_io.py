@@ -55,6 +55,12 @@ def _serialize_track(track: Track) -> dict:
         "track_type": track.track_type.value,
         "keys": [],
     }
+    # Vector2Trackの場合はlabel_x/label_yも保存
+    if track.track_type == TrackType.VECTOR2:
+        if track.label_x is not None:
+            result["label_x"] = track.label_x
+        if track.label_y is not None:
+            result["label_y"] = track.label_y
     for k in track.keys:
         key_data = {
             "t": k.t,
@@ -117,6 +123,12 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
             track_id=track_obj.get("id"),
             _init_handles=False,
         )
+        # Vector2Trackの場合はlabel_x/label_yも読み込み
+        if track_type == TrackType.VECTOR2:
+            if "label_x" in track_obj:
+                track.label_x = track_obj["label_x"]
+            if "label_y" in track_obj:
+                track.label_y = track_obj["label_y"]
         track.clamp_times()
         tracks.append(track)
     if not tracks:

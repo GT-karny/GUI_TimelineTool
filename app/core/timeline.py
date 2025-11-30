@@ -369,6 +369,8 @@ class Track:
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
     _init_handles: bool = field(default=True, repr=False, compare=False)
+    label_x: str | None = None  # X component label for vector2 tracks
+    label_y: str | None = None  # Y component label for vector2 tracks
 
     def __post_init__(self) -> None:
         # Vector2Trackの場合、キーのvx/vyがNoneの場合は0.0に設定
