@@ -34,14 +34,31 @@ class SingleTrackPosProvider:
             ):
                 if handle is None:
                     continue
-                # Vector2Trackの場合、ハンドルの当たり判定も0の位置で行う
+                # Vector2Trackの場合、ハンドルをX/Yそれぞれに対して当たり判定（表示オフセットを考慮）
                 if is_vector2:
+                    # 表示時間範囲の0.5%をオフセットとして使用
+                    x_range = self.vb.viewRange()[0]
+                    time_span = x_range[1] - x_range[0]
+                    display_offset = max(0.005, time_span * 0.005)  # 最小0.005秒
+                    
+                    # Xカーブ上のハンドル（左にオフセット）
+                    handle_vx = handle.vx if handle.vx is not None else handle.v
                     yield KeyPoint(
                         track_id,
                         id(k),
-                        handle.t,
-                        0.0,
-                        component=component,
+                        handle.t - display_offset,  # 表示位置に合わせてオフセット
+                        handle_vx,
+                        component=component + "_x",
+                        item_id=id(handle),
+                    )
+                    # Yカーブ上のハンドル（右にオフセット）
+                    handle_vy = handle.vy if handle.vy is not None else handle.v
+                    yield KeyPoint(
+                        track_id,
+                        id(k),
+                        handle.t + display_offset,  # 表示位置に合わせてオフセット
+                        handle_vy,
+                        component=component + "_y",
                         item_id=id(handle),
                     )
                 else:

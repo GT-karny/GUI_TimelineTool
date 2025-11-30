@@ -22,6 +22,8 @@ class Handle:
 
     t: float
     v: float
+    vx: float | None = None  # X component for vector2 tracks
+    vy: float | None = None  # Y component for vector2 tracks
 
     def copy(self) -> "Handle":
         return replace(self)
@@ -39,6 +41,10 @@ class Handle:
         result = cls(**data)
         result.t = float(result.t)
         result.v = float(result.v)
+        if result.vx is not None:
+            result.vx = float(result.vx)
+        if result.vy is not None:
+            result.vy = float(result.vy)
         return result
 
     def shift_time(self, dt: float) -> None:
@@ -46,6 +52,20 @@ class Handle:
 
     def shift_value(self, dv: float) -> None:
         self.v = float(self.v + dv)
+
+    def shift_value_x(self, dvx: float) -> None:
+        """Shift X component for vector2 tracks."""
+        if self.vx is not None:
+            self.vx = float(self.vx + dvx)
+        else:
+            self.v = float(self.v + dvx)
+
+    def shift_value_y(self, dvy: float) -> None:
+        """Shift Y component for vector2 tracks."""
+        if self.vy is not None:
+            self.vy = float(self.vy + dvy)
+        else:
+            self.v = float(self.v + dvy)
 
 
 @dataclass
@@ -175,9 +195,15 @@ def initialize_handle_positions(
     def _needs_adjust(handle: Handle | None) -> bool:
         if handle is None:
             return False
-        # Vector2Trackの場合、ハンドルの値は0ベースで判定
+        # Vector2Trackの場合、ハンドルの値はX/Yそれぞれチェック
         if is_vector2:
-            return abs(handle.t - key.t) < eps and abs(handle.v - 0.0) < eps
+            key_vx = key.vx if key.vx is not None else 0.0
+            key_vy = key.vy if key.vy is not None else 0.0
+            handle_vx = handle.vx if handle.vx is not None else handle.v
+            handle_vy = handle.vy if handle.vy is not None else handle.v
+            return (abs(handle.t - key.t) < eps and 
+                    abs(handle_vx - key_vx) < eps and 
+                    abs(handle_vy - key_vy) < eps)
         else:
             return abs(handle.t - key.t) < eps and abs(handle.v - key.v) < eps
 
@@ -195,11 +221,15 @@ def initialize_handle_positions(
             return
 
         target_t = key.t
-        # Vector2Trackの場合、ハンドルの値は0ベースで初期化
+        # Vector2Trackの場合、ハンドルの値はX/Yそれぞれ初期化
         if is_vector2:
             target_v = 0.0
+            target_vx = key.vx if key.vx is not None else 0.0
+            target_vy = key.vy if key.vy is not None else 0.0
         else:
             target_v = key.v
+            target_vx = None
+            target_vy = None
 
         if direction == "in":
             source = prev_key
@@ -216,22 +246,41 @@ def initialize_handle_positions(
 
         if segment is not None:
             if is_vector2:
-                # Vector2Trackの場合、ハンドルの値は0のまま、時間だけ調整
+                # Vector2Trackの場合、X/Yそれぞれのカーブの傾きに基づいて初期化
+                segment_vx = segment.vx if segment.vx is not None else 0.0
+                segment_vy = segment.vy if segment.vy is not None else 0.0
+                key_vx = key.vx if key.vx is not None else 0.0
+                key_vy = key.vy if key.vy is not None else 0.0
+                
                 if direction == "in" and segment.t > key.t:
                     span_t = segment.t - key.t
                     dt = span_t * fraction
                     target_t = key.t - dt
+                    slope_x = (segment_vx - key_vx) / span_t
+                    slope_y = (segment_vy - key_vy) / span_t
+                    target_vx = key_vx - slope_x * dt
+                    target_vy = key_vy - slope_y * dt
                 elif direction == "out" and segment.t < key.t:
                     span_t = key.t - segment.t
                     dt = span_t * fraction
                     target_t = key.t + dt
+                    slope_x = (key_vx - segment_vx) / span_t
+                    slope_y = (key_vy - segment_vy) / span_t
+                    target_vx = key_vx + slope_x * dt
+                    target_vy = key_vy + slope_y * dt
                 else:
                     span_t = abs(segment.t - key.t)
                     dt = span_t * fraction
+                    slope_x = (segment_vx - key_vx) / (segment.t - key.t)
+                    slope_y = (segment_vy - key_vy) / (segment.t - key.t)
                     if direction == "in":
                         target_t = key.t - dt
+                        target_vx = key_vx - slope_x * dt
+                        target_vy = key_vy - slope_y * dt
                     else:
                         target_t = key.t + dt
+                        target_vx = key_vx + slope_x * dt
+                        target_vy = key_vy + slope_y * dt
             else:
                 # ScalarTrackの場合、従来通り
                 if direction == "in" and segment.t > key.t:
@@ -262,7 +311,7 @@ def initialize_handle_positions(
                 target_t = key.t - span_t
             else:
                 target_t = key.t + span_t
-            # Vector2Trackの場合、target_vは0のまま
+            # Vector2Trackの場合、target_vx/vyはキーの値のまま
 
         if direction == "in":
             target_t = max(0.0, target_t)
@@ -275,6 +324,19 @@ def initialize_handle_positions(
                     target_t = key.t - 1e-3
                 else:
                     target_t = key.t + 1e-3
+            # vx/vyがキーと同じ場合は少しずらす
+            key_vx = key.vx if key.vx is not None else 0.0
+            key_vy = key.vy if key.vy is not None else 0.0
+            if abs(target_vx - key_vx) < eps:
+                if direction == "in":
+                    target_vx = key_vx - 1e-3
+                else:
+                    target_vx = key_vx + 1e-3
+            if abs(target_vy - key_vy) < eps:
+                if direction == "in":
+                    target_vy = key_vy - 1e-3
+                else:
+                    target_vy = key_vy + 1e-3
         else:
             if abs(target_t - key.t) < eps and abs(target_v - key.v) < eps:
                 if direction == "in":
@@ -284,6 +346,9 @@ def initialize_handle_positions(
 
         handle.t = float(target_t)
         handle.v = float(target_v)
+        if is_vector2:
+            handle.vx = float(target_vx)
+            handle.vy = float(target_vy)
 
     _apply_defaults(handle_in, "in")
     _apply_defaults(handle_out, "out")

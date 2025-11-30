@@ -211,28 +211,68 @@ class TimelinePlot(QtWidgets.QWidget):
                         continue
                     handle_id = id(handle)
                     is_handle_sel = handle_id in selected_handle_ids
-                    # Vector2Trackの場合、ハンドルも0の位置に表示
+                    # Vector2Trackの場合、ハンドルをX/Yそれぞれのカーブ上に表示（時間軸方向にオフセット）
                     if is_vector2:
-                        handle_pos = (handle.t, 0.0)
-                        key_pos_v = 0.0
+                        # 表示時間範囲の0.5%をオフセットとして使用
+                        x_range = self.viewbox.viewRange()[0]
+                        time_span = x_range[1] - x_range[0]
+                        display_offset = max(0.005, time_span * 0.005)  # 最小0.005秒
+                        
+                        # Xカーブ上のハンドル（左にオフセット）
+                        vx = k.vx if k.vx is not None else 0.0
+                        handle_vx = handle.vx if handle.vx is not None else handle.v
+                        handle_spots.append(
+                            {
+                                "pos": (handle.t - display_offset, handle_vx),
+                                "data": (component + "_x", key_id, handle_id),
+                                "brush": pg.mkBrush(255, 200, 80, 220)
+                                if is_handle_sel
+                                else pg.mkBrush(255, 100, 100, 200),
+                                "size": 11 if is_handle_sel else 8,
+                                "pen": pg.mkPen(200, 140, 40, 220)
+                                if is_handle_sel
+                                else pg.mkPen(200, 50, 50, 200),
+                            }
+                        )
+                        line_x.extend([k.t, handle.t, float("nan")])
+                        line_y.extend([vx, handle_vx, float("nan")])
+                        
+                        # Yカーブ上のハンドル（右にオフセット）
+                        vy = k.vy if k.vy is not None else 0.0
+                        handle_vy = handle.vy if handle.vy is not None else handle.v
+                        handle_spots.append(
+                            {
+                                "pos": (handle.t + display_offset, handle_vy),
+                                "data": (component + "_y", key_id, handle_id),
+                                "brush": pg.mkBrush(255, 200, 80, 220)
+                                if is_handle_sel
+                                else pg.mkBrush(100, 100, 255, 200),
+                                "size": 11 if is_handle_sel else 8,
+                                "pen": pg.mkPen(200, 140, 40, 220)
+                                if is_handle_sel
+                                else pg.mkPen(50, 50, 200, 200),
+                            }
+                        )
+                        line_x.extend([k.t, handle.t, float("nan")])
+                        line_y.extend([vy, handle_vy, float("nan")])
                     else:
                         handle_pos = (handle.t, handle.v)
                         key_pos_v = k.v
-                    handle_spots.append(
-                        {
-                            "pos": handle_pos,
-                            "data": (component, key_id, handle_id),
-                            "brush": pg.mkBrush(255, 200, 80, 220)
-                            if is_handle_sel
-                            else pg.mkBrush(90, 90, 90, 200),
-                            "size": 11 if is_handle_sel else 8,
-                            "pen": pg.mkPen(200, 140, 40, 220)
-                            if is_handle_sel
-                            else pg.mkPen(70, 70, 70, 200),
-                        }
-                    )
-                    line_x.extend([k.t, handle.t, float("nan")])
-                    line_y.extend([key_pos_v, handle_pos[1], float("nan")])
+                        handle_spots.append(
+                            {
+                                "pos": handle_pos,
+                                "data": (component, key_id, handle_id),
+                                "brush": pg.mkBrush(255, 200, 80, 220)
+                                if is_handle_sel
+                                else pg.mkBrush(90, 90, 90, 200),
+                                "size": 11 if is_handle_sel else 8,
+                                "pen": pg.mkPen(200, 140, 40, 220)
+                                if is_handle_sel
+                                else pg.mkPen(70, 70, 70, 200),
+                            }
+                        )
+                        line_x.extend([k.t, handle.t, float("nan")])
+                        line_y.extend([key_pos_v, handle_pos[1], float("nan")])
             self.handle_points.setData(handle_spots)
             if line_x and line_y:
                 self.handle_lines.setData(line_x, line_y)

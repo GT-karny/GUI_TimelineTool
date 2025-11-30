@@ -159,6 +159,7 @@ class MoveHandleCommand(QUndoCommand):
         handle_attr: str,
         before: Tuple[float, float],
         after: Tuple[float, float],
+        component: str | None = None,  # "x" or "y" for vector2 tracks
         label: str = "Move Handle",
         parent: Optional[QUndoCommand] = None,
     ) -> None:
@@ -167,6 +168,7 @@ class MoveHandleCommand(QUndoCommand):
         self.track_id = str(track_id)
         self.key = key
         self._handle_attr = str(handle_attr)
+        self._component = component  # "x", "y", or None
         self.bt, self.bv = before
         self.at, self.av = after
 
@@ -175,8 +177,15 @@ class MoveHandleCommand(QUndoCommand):
         if handle is None:
             handle = Handle(self.key.t, self.key.v)
             setattr(self.key, self._handle_attr, handle)
+        # 時間軸は同期して更新
         handle.t = float(t)
-        handle.v = float(v)
+        # Vector2Trackの場合、componentに応じてvx/vyを更新
+        if self._component == "x":
+            handle.vx = float(v)
+        elif self._component == "y":
+            handle.vy = float(v)
+        else:
+            handle.v = float(v)
 
     def redo(self) -> None:
         self._apply(self.at, self.av)

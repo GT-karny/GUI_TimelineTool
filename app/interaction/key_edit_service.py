@@ -73,7 +73,14 @@ class KeyEditService:
         else:
             handle = self._resolve_handle(hit)
             if handle is not None:
-                self._drag.start_tv = (handle.t, handle.v)
+                # Vector2Trackの場合、component名からX/Yを判定
+                if hit.component.endswith("_x"):
+                    handle_v = handle.vx if handle.vx is not None else handle.v
+                elif hit.component.endswith("_y"):
+                    handle_v = handle.vy if handle.vy is not None else handle.v
+                else:
+                    handle_v = handle.v
+                self._drag.start_tv = (handle.t, handle_v)
             else:
                 self._drag.start_tv = None
 
@@ -103,8 +110,16 @@ class KeyEditService:
             handle = self._resolve_handle(key_point)
             if handle is None:
                 return False
+            
+            # 時間軸は同期して更新（表示オフセットは表示のみに影響し、実際の値には影響しない）
             handle.t = float(new_t)
-            handle.v = float(new_v)
+            # Vector2Trackの場合、component名からX/Yを判定して値を更新
+            if key_point.component.endswith("_x"):
+                handle.vx = float(new_v)
+            elif key_point.component.endswith("_y"):
+                handle.vy = float(new_v)
+            else:
+                handle.v = float(new_v)
         return True
 
     def commit_drag(self) -> bool:
@@ -137,9 +152,23 @@ class KeyEditService:
         else:
             handle = self._resolve_handle(key_point)
             if handle is not None:
-                t1, v1 = handle.t, handle.v
+                # Vector2Trackの場合、component名からX/Yを判定
+                if key_point.component.endswith("_x"):
+                    v1 = handle.vx if handle.vx is not None else handle.v
+                    component_suffix = "_x"
+                elif key_point.component.endswith("_y"):
+                    v1 = handle.vy if handle.vy is not None else handle.v
+                    component_suffix = "_y"
+                else:
+                    v1 = handle.v
+                    component_suffix = ""
+                t1 = handle.t
                 if abs(t0 - t1) > 1e-12 or abs(v0 - v1) > 1e-12:
-                    attr = "handle_in" if key_point.component == "handle_in" else "handle_out"
+                    # component名からベース名を取得（"_x"や"_y"を除去）
+                    base_component = key_point.component
+                    if component_suffix:
+                        base_component = base_component[:-len(component_suffix)]
+                    attr = "handle_in" if base_component == "handle_in" else "handle_out"
                     cmd = MoveHandleCommand(
                         self.timeline,
                         key_point.track_id,
@@ -147,6 +176,7 @@ class KeyEditService:
                         attr,
                         (t0, v0),
                         (t1, v1),
+                        component=component_suffix[1:] if component_suffix else None,
                     )
                     try:
                         self._push_undo(cmd)
@@ -240,9 +270,13 @@ class KeyEditService:
         key = self._resolve_key(kp)
         if key is None:
             return None
-        if kp.component == "handle_in":
+        # component名からベース名を取得（"_x"や"_y"を除去）
+        base_component = kp.component
+        if base_component.endswith("_x") or base_component.endswith("_y"):
+            base_component = base_component[:-2]
+        if base_component == "handle_in":
             return getattr(key, "handle_in", None)
-        if kp.component == "handle_out":
+        if base_component == "handle_out":
             return getattr(key, "handle_out", None)
         return None
 
