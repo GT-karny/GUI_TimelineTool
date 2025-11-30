@@ -77,11 +77,11 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
     tracks: List[Track] = []
     for idx, track_obj in enumerate(data):
         name = track_obj.get("name") or f"Track {idx + 1}"
-        interp_raw = track_obj.get("interp", InterpMode.CUBIC.value)
+        interp_raw = track_obj.get("interp", InterpMode.BEZIER.value)
         try:
             interp = InterpMode(interp_raw)
         except ValueError:
-            interp = InterpMode.CUBIC
+            interp = InterpMode.BEZIER
         keys = [Keyframe(**_coerce_key_payload(kv)) for kv in track_obj.get("keys", [])]
         if not keys:
             keys = [Keyframe(0.0, 0.0)]

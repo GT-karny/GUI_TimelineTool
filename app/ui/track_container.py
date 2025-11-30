@@ -33,7 +33,7 @@ class TrackContainer(QtWidgets.QWidget):
         self._active_row: Optional[TrackRow] = None
         self._active_track_id: Optional[str] = None
         self._pending_rename_old_names: Dict[str, Optional[str]] = {}
-        self._track_height: int = 120
+        self._track_height: int = 180
 
         self._build_ui()
 
@@ -117,7 +117,7 @@ class TrackContainer(QtWidgets.QWidget):
         header.addStretch(1)
 
         self.slider_height = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.slider_height.setRange(60, 300)
+        self.slider_height.setRange(60, 600)
         self.slider_height.setValue(self._track_height)
         self.slider_height.setFixedWidth(80)
         self.slider_height.setToolTip("Track Height")

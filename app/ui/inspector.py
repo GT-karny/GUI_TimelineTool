@@ -2,7 +2,19 @@
 from __future__ import annotations
 from typing import Sequence
 
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
+
+
+class AutoSelectDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+    """フォーカス時に値を全選択するQDoubleSpinBox。"""
+    
+    def focusInEvent(self, event: QtGui.QFocusEvent) -> None:
+        """フォーカスが当たったときに値を全選択する。"""
+        super().focusInEvent(event)
+        self.selectAll()
+        # マウスクリックでフォーカスが当たった場合も全選択するため、
+        # 少し遅延させてselectAll()を呼び出す
+        QtCore.QTimer.singleShot(0, self.selectAll)
 
 
 class KeyInspector(QtWidgets.QWidget):
@@ -27,7 +39,7 @@ class KeyInspector(QtWidgets.QWidget):
 
         # Time
         self.lbl_time = QtWidgets.QLabel("Time")
-        self.time_spin = QtWidgets.QDoubleSpinBox()
+        self.time_spin = AutoSelectDoubleSpinBox()
         self.time_spin.setRange(0.0, 1e6)
         self.time_spin.setDecimals(6)
         self.time_spin.setSingleStep(0.01)
@@ -37,7 +49,7 @@ class KeyInspector(QtWidgets.QWidget):
 
         # Value
         self.lbl_value = QtWidgets.QLabel("Value")
-        self.value_spin = QtWidgets.QDoubleSpinBox()
+        self.value_spin = AutoSelectDoubleSpinBox()
         self.value_spin.setRange(-1e9, 1e9)
         self.value_spin.setDecimals(6)
         self.value_spin.setSingleStep(0.1)

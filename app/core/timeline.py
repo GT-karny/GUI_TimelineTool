@@ -229,7 +229,7 @@ def _new_track_id() -> str:
 @dataclass
 class Track:
     name: str = "FloatTrack"
-    interp: InterpMode = InterpMode.CUBIC
+    interp: InterpMode = InterpMode.BEZIER
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
     _init_handles: bool = field(default=True, repr=False, compare=False)
