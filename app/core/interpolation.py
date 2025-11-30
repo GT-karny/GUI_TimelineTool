@@ -5,12 +5,22 @@ try:
 except Exception:
     HAVE_SCIPY = False
 
-from .timeline import Track, InterpMode, Keyframe
+from .timeline import Track, InterpMode, Keyframe, TrackType
 
 def _sorted_arrays(track: Track):
     ks = track.sorted()
     t = np.array([k.t for k in ks], dtype=float)
     v = np.array([k.v for k in ks], dtype=float)
+    return t, v
+
+def _sorted_arrays_vector2(track: Track, component: str):
+    """Get sorted arrays for vector2 track component (x or y)."""
+    ks = track.sorted()
+    t = np.array([k.t for k in ks], dtype=float)
+    if component == "x":
+        v = np.array([k.vx if k.vx is not None else 0.0 for k in ks], dtype=float)
+    else:  # component == "y"
+        v = np.array([k.vy if k.vy is not None else 0.0 for k in ks], dtype=float)
     return t, v
 
 def eval_linear(track: Track, t_eval: np.ndarray) -> np.ndarray:
@@ -172,7 +182,115 @@ def eval_bezier(track: Track, t_eval: np.ndarray) -> np.ndarray:
 
     return result
 
+def eval_linear_vector2(track: Track, t_eval: np.ndarray, component: str) -> np.ndarray:
+    """Evaluate linear interpolation for vector2 track component."""
+    t, v = _sorted_arrays_vector2(track, component)
+    if len(t) == 0:
+        return np.zeros_like(t_eval, dtype=float)
+    if len(t) == 1:
+        return np.full_like(t_eval, v[0], dtype=float)
+    return np.interp(t_eval, t, v, left=v[0], right=v[-1])
+
+def eval_step_vector2(track: Track, t_eval: np.ndarray, component: str) -> np.ndarray:
+    """Evaluate step interpolation for vector2 track component."""
+    t, v = _sorted_arrays_vector2(track, component)
+    if len(t) == 0:
+        return np.zeros_like(t_eval, dtype=float)
+    if len(t) == 1:
+        return np.full_like(t_eval, v[0], dtype=float)
+    idxs = np.searchsorted(t, t_eval, side="right") - 1
+    idxs = np.clip(idxs, 0, len(v)-1)
+    return v[idxs]
+
+def eval_cubic_vector2(track: Track, t_eval: np.ndarray, component: str) -> np.ndarray:
+    """Evaluate cubic interpolation for vector2 track component."""
+    t, v = _sorted_arrays_vector2(track, component)
+    if len(t) < 3 or not HAVE_SCIPY or np.any(np.diff(t) <= 0):
+        return eval_linear_vector2(track, t_eval, component)
+    cs = CubicSpline(t, v, bc_type="natural", extrapolate=True)
+    return cs(t_eval)
+
+def _eval_bezier_segment_vector2(k0: Keyframe, k1: Keyframe, t_eval: np.ndarray, component: str) -> np.ndarray:
+    """Evaluate bezier segment for vector2 track component."""
+    ctrl_t = np.array(
+        [k0.t, k0.handle_out.t, k1.handle_in.t, k1.t], dtype=float
+    )
+    
+    if component == "x":
+        v0 = k0.vx if k0.vx is not None else 0.0
+        v1 = k1.vx if k1.vx is not None else 0.0
+        h0_out_v = k0.handle_out.vx if hasattr(k0.handle_out, 'vx') and k0.handle_out.vx is not None else k0.handle_out.v
+        h1_in_v = k1.handle_in.vx if hasattr(k1.handle_in, 'vx') and k1.handle_in.vx is not None else k1.handle_in.v
+    else:  # component == "y"
+        v0 = k0.vy if k0.vy is not None else 0.0
+        v1 = k1.vy if k1.vy is not None else 0.0
+        h0_out_v = k0.handle_out.vy if hasattr(k0.handle_out, 'vy') and k0.handle_out.vy is not None else k0.handle_out.v
+        h1_in_v = k1.handle_in.vy if hasattr(k1.handle_in, 'vy') and k1.handle_in.vy is not None else k1.handle_in.v
+    
+    if not _segment_is_monotonic(ctrl_t):
+        return _evaluate_linear_segment(k0.t, k1.t, v0, v1, t_eval)
+
+    ctrl_v = np.array([v0, h0_out_v, h1_in_v, v1], dtype=float)
+
+    result = np.empty_like(t_eval, dtype=float)
+    for idx, target in enumerate(t_eval):
+        u = _solve_segment_parameter(float(target), ctrl_t)
+        result[idx] = _cubic_bezier(u, *ctrl_v)
+    return result
+
+def eval_bezier_vector2(track: Track, t_eval: np.ndarray, component: str) -> np.ndarray:
+    """Evaluate bezier interpolation for vector2 track component."""
+    t_eval = np.asarray(t_eval, dtype=float)
+    keys = track.sorted()
+    if not keys:
+        return np.zeros_like(t_eval, dtype=float)
+    if len(keys) == 1:
+        if component == "x":
+            v = keys[0].vx if keys[0].vx is not None else 0.0
+        else:
+            v = keys[0].vy if keys[0].vy is not None else 0.0
+        return np.full_like(t_eval, v, dtype=float)
+
+    ts = np.array([k.t for k in keys], dtype=float)
+    if component == "x":
+        vs = np.array([k.vx if k.vx is not None else 0.0 for k in keys], dtype=float)
+    else:
+        vs = np.array([k.vy if k.vy is not None else 0.0 for k in keys], dtype=float)
+
+    idxs = np.searchsorted(ts, t_eval, side="right") - 1
+    result = np.empty_like(t_eval, dtype=float)
+
+    mask_before = idxs < 0
+    result[mask_before] = vs[0]
+
+    mask_after = idxs >= len(ts) - 1
+    result[mask_after] = vs[-1]
+
+    mask_mid = ~(mask_before | mask_after)
+    if np.any(mask_mid):
+        mid_ts = t_eval[mask_mid]
+        mid_idxs = idxs[mask_mid]
+        mid_result = np.empty_like(mid_ts, dtype=float)
+
+        for seg_idx in np.unique(mid_idxs):
+            seg_mask = mid_idxs == seg_idx
+            seg_times = mid_ts[seg_mask]
+            segment_values = _eval_bezier_segment_vector2(
+                keys[seg_idx], keys[seg_idx + 1], seg_times, component
+            )
+            mid_result[seg_mask] = segment_values
+
+        result[mask_mid] = mid_result
+
+    return result
+
 def evaluate(track: Track, t_eval: np.ndarray) -> np.ndarray:
+    """Evaluate track at given times. For scalar tracks, returns 1D array. For vector2 tracks, returns 1D array (legacy compatibility)."""
+    if track.track_type == TrackType.VECTOR2:
+        # For vector2 tracks, default to X component for backward compatibility
+        # Use evaluate_x or evaluate_y for explicit component access
+        return evaluate_x(track, t_eval)
+    
     if track.interp == InterpMode.LINEAR:
         return eval_linear(track, t_eval)
     if track.interp == InterpMode.STEP:
@@ -180,3 +298,29 @@ def evaluate(track: Track, t_eval: np.ndarray) -> np.ndarray:
     if track.interp == InterpMode.BEZIER:
         return eval_bezier(track, t_eval)
     return eval_cubic(track, t_eval)
+
+def evaluate_x(track: Track, t_eval: np.ndarray) -> np.ndarray:
+    """Evaluate X component of vector2 track."""
+    if track.track_type != TrackType.VECTOR2:
+        return evaluate(track, t_eval)
+    
+    if track.interp == InterpMode.LINEAR:
+        return eval_linear_vector2(track, t_eval, "x")
+    if track.interp == InterpMode.STEP:
+        return eval_step_vector2(track, t_eval, "x")
+    if track.interp == InterpMode.BEZIER:
+        return eval_bezier_vector2(track, t_eval, "x")
+    return eval_cubic_vector2(track, t_eval, "x")
+
+def evaluate_y(track: Track, t_eval: np.ndarray) -> np.ndarray:
+    """Evaluate Y component of vector2 track."""
+    if track.track_type != TrackType.VECTOR2:
+        return np.zeros_like(t_eval, dtype=float)
+    
+    if track.interp == InterpMode.LINEAR:
+        return eval_linear_vector2(track, t_eval, "y")
+    if track.interp == InterpMode.STEP:
+        return eval_step_vector2(track, t_eval, "y")
+    if track.interp == InterpMode.BEZIER:
+        return eval_bezier_vector2(track, t_eval, "y")
+    return eval_cubic_vector2(track, t_eval, "y")

@@ -24,6 +24,8 @@ class KeyInspector(QtWidgets.QWidget):
     """
     sig_time_edited = QtCore.Signal(float)
     sig_value_edited = QtCore.Signal(float)
+    sig_value_x_edited = QtCore.Signal(float)
+    sig_value_y_edited = QtCore.Signal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,7 +49,7 @@ class KeyInspector(QtWidgets.QWidget):
         self.time_placeholder = QtWidgets.QLabel("—")
         self.time_placeholder.setEnabled(False)
 
-        # Value
+        # Value (for scalar tracks)
         self.lbl_value = QtWidgets.QLabel("Value")
         self.value_spin = AutoSelectDoubleSpinBox()
         self.value_spin.setRange(-1e9, 1e9)
@@ -55,6 +57,23 @@ class KeyInspector(QtWidgets.QWidget):
         self.value_spin.setSingleStep(0.1)
         self.value_placeholder = QtWidgets.QLabel("—")
         self.value_placeholder.setEnabled(False)
+
+        # Value X/Y (for vector2 tracks)
+        self.lbl_value_x = QtWidgets.QLabel("X")
+        self.value_x_spin = AutoSelectDoubleSpinBox()
+        self.value_x_spin.setRange(-1e9, 1e9)
+        self.value_x_spin.setDecimals(6)
+        self.value_x_spin.setSingleStep(0.1)
+        self.value_x_placeholder = QtWidgets.QLabel("—")
+        self.value_x_placeholder.setEnabled(False)
+
+        self.lbl_value_y = QtWidgets.QLabel("Y")
+        self.value_y_spin = AutoSelectDoubleSpinBox()
+        self.value_y_spin.setRange(-1e9, 1e9)
+        self.value_y_spin.setDecimals(6)
+        self.value_y_spin.setSingleStep(0.1)
+        self.value_y_placeholder = QtWidgets.QLabel("—")
+        self.value_y_placeholder.setEnabled(False)
 
         # Stack (編集可 / placeholder の切替)
         self.time_stack = QtWidgets.QStackedWidget()
@@ -65,6 +84,14 @@ class KeyInspector(QtWidgets.QWidget):
         self.value_stack.addWidget(self.value_spin)       # 0
         self.value_stack.addWidget(self.value_placeholder)# 1
 
+        self.value_x_stack = QtWidgets.QStackedWidget()
+        self.value_x_stack.addWidget(self.value_x_spin)       # 0
+        self.value_x_stack.addWidget(self.value_x_placeholder)# 1
+
+        self.value_y_stack = QtWidgets.QStackedWidget()
+        self.value_y_stack.addWidget(self.value_y_spin)       # 0
+        self.value_y_stack.addWidget(self.value_y_placeholder)# 1
+
         # 並べる（左揃え）
         lay.addWidget(self.lbl_track)
         lay.addWidget(self.track_value)
@@ -72,13 +99,20 @@ class KeyInspector(QtWidgets.QWidget):
         lay.addWidget(self.lbl_time)
         lay.addWidget(self.time_stack)
         lay.addSpacing(12)
+        # Valueフィールドは動的に切り替え（scalar/vector2）
         lay.addWidget(self.lbl_value)
         lay.addWidget(self.value_stack)
+        lay.addWidget(self.lbl_value_x)
+        lay.addWidget(self.value_x_stack)
+        lay.addWidget(self.lbl_value_y)
+        lay.addWidget(self.value_y_stack)
         lay.addStretch(1)  # 左寄せにして右は空き
 
         # signals
         self.time_spin.valueChanged.connect(self._emit_time)
         self.value_spin.valueChanged.connect(self._emit_value)
+        self.value_x_spin.valueChanged.connect(self._emit_value_x)
+        self.value_y_spin.valueChanged.connect(self._emit_value_y)
 
         self.set_selection_state(False)
 
@@ -88,17 +122,38 @@ class KeyInspector(QtWidgets.QWidget):
 
         # スピンボックスとプレースホルダの高さを揃える
         h = 24  # お好みで
-        for w in (self.track_value, self.time_spin, self.value_spin, self.time_placeholder, self.value_placeholder):
+        for w in (self.track_value, self.time_spin, self.value_spin, self.value_x_spin, self.value_y_spin,
+                  self.time_placeholder, self.value_placeholder, self.value_x_placeholder, self.value_y_placeholder):
             w.setFixedHeight(h)
 
 
     # ---- 外部からの反映 ----
-    def set_single_values(self, track_name: str, t: float, v: float):
+    def set_single_values(self, track_name: str, t: float, v: float, is_vector2: bool = False, vx: float | None = None, vy: float | None = None):
         self._updating = True
         try:
             self._set_track_label([track_name])
             self.time_spin.setValue(float(max(0.0, t)))
-            self.value_spin.setValue(float(v))
+            
+            if is_vector2:
+                # Vector2Track: XとYを表示
+                self.lbl_value.setVisible(False)
+                self.value_stack.setVisible(False)
+                self.lbl_value_x.setVisible(True)
+                self.value_x_stack.setVisible(True)
+                self.lbl_value_y.setVisible(True)
+                self.value_y_stack.setVisible(True)
+                self.value_x_spin.setValue(float(vx if vx is not None else 0.0))
+                self.value_y_spin.setValue(float(vy if vy is not None else 0.0))
+            else:
+                # ScalarTrack: Valueを表示
+                self.lbl_value.setVisible(True)
+                self.value_stack.setVisible(True)
+                self.lbl_value_x.setVisible(False)
+                self.value_x_stack.setVisible(False)
+                self.lbl_value_y.setVisible(False)
+                self.value_y_stack.setVisible(False)
+                self.value_spin.setValue(float(v))
+            
             self.set_selection_state(True)
         finally:
             self._updating = False
@@ -114,8 +169,12 @@ class KeyInspector(QtWidgets.QWidget):
     def set_selection_state(self, has_single: bool):
         self.time_stack.setCurrentIndex(0 if has_single else 1)
         self.value_stack.setCurrentIndex(0 if has_single else 1)
+        self.value_x_stack.setCurrentIndex(0 if has_single else 1)
+        self.value_y_stack.setCurrentIndex(0 if has_single else 1)
         self.time_spin.setEnabled(has_single)
         self.value_spin.setEnabled(has_single)
+        self.value_x_spin.setEnabled(has_single)
+        self.value_y_spin.setEnabled(has_single)
 
     # ---- 内部 ----
     def _set_track_label(self, names: Sequence[str]) -> None:
@@ -141,3 +200,11 @@ class KeyInspector(QtWidgets.QWidget):
     def _emit_value(self, val: float):
         if not self._updating:
             self.sig_value_edited.emit(float(val))
+
+    def _emit_value_x(self, val: float):
+        if not self._updating:
+            self.sig_value_x_edited.emit(float(val))
+
+    def _emit_value_y(self, val: float):
+        if not self._updating:
+            self.sig_value_y_edited.emit(float(val))

@@ -11,6 +11,11 @@ class InterpMode(str, Enum):
     STEP   = "step"
     BEZIER = "bezier"
 
+
+class TrackType(str, Enum):
+    SCALAR = "scalar"
+    VECTOR2 = "vector2"
+
 @dataclass
 class Handle:
     """Metadata describing a Bezier handle/control point."""
@@ -49,10 +54,16 @@ class Keyframe:
     v: float
     handle_in: Handle | None = None
     handle_out: Handle | None = None
+    vx: float | None = None  # X component for vector2 tracks
+    vy: float | None = None  # Y component for vector2 tracks
 
     def __post_init__(self) -> None:
         self.t = float(self.t)
         self.v = float(self.v)
+        if self.vx is not None:
+            self.vx = float(self.vx)
+        if self.vy is not None:
+            self.vy = float(self.vy)
         self.handle_in = self._coerce_handle(self.handle_in)
         self.handle_out = self._coerce_handle(self.handle_out)
 
@@ -103,11 +114,33 @@ class Keyframe:
         if self.handle_out is not None:
             self.handle_out.shift_value(dv)
 
+    def set_value_x(self, new_vx: float) -> None:
+        """Set X component for vector2 tracks."""
+        self.vx = float(new_vx)
+
+    def set_value_y(self, new_vy: float) -> None:
+        """Set Y component for vector2 tracks."""
+        self.vy = float(new_vy)
+
+    def set_value_vector2(self, new_vx: float, new_vy: float) -> None:
+        """Set both X and Y components for vector2 tracks."""
+        self.vx = float(new_vx)
+        self.vy = float(new_vy)
+
     def translate(self, dt: float = 0.0, dv: float = 0.0) -> None:
         if dt:
             self.set_time(self.t + dt)
         if dv:
             self.set_value(self.v + dv)
+
+    def translate_vector2(self, dt: float = 0.0, dvx: float = 0.0, dvy: float = 0.0) -> None:
+        """Translate vector2 keyframe by time and X/Y deltas."""
+        if dt:
+            self.set_time(self.t + dt)
+        if dvx and self.vx is not None:
+            self.vx = float(self.vx + dvx)
+        if dvy and self.vy is not None:
+            self.vy = float(self.vy + dvy)
 
 
 def initialize_handle_positions(
@@ -230,6 +263,7 @@ def _new_track_id() -> str:
 class Track:
     name: str = "FloatTrack"
     interp: InterpMode = InterpMode.BEZIER
+    track_type: TrackType = TrackType.SCALAR
     keys: List[Keyframe] = field(default_factory=_default_keys)
     track_id: str = field(default_factory=_new_track_id)
     _init_handles: bool = field(default=True, repr=False, compare=False)

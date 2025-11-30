@@ -5,8 +5,8 @@ from PySide6 import QtWidgets
 import pyqtgraph as pg
 import numpy as np
 
-from ..core.timeline import Track, Keyframe, InterpMode
-from ..core.interpolation import evaluate
+from ..core.timeline import Track, Keyframe, InterpMode, TrackType
+from ..core.interpolation import evaluate, evaluate_x, evaluate_y
 from ..playback.controller import PlaybackController
 from ..interaction.selection import SelectedKey
 
@@ -38,6 +38,9 @@ class TimelinePlot(QtWidgets.QWidget):
 
         # 曲線・点・プレイヘッド
         self.curve_item = self.plot.plot([], [], pen=pg.mkPen(200, 200, 200, 255, width=2))
+        # Vector2Track用のX/Yカーブ
+        self.curve_item_x = self.plot.plot([], [], pen=pg.mkPen(255, 100, 100, 255, width=2))
+        self.curve_item_y = self.plot.plot([], [], pen=pg.mkPen(100, 100, 255, 255, width=2))
         self.handle_lines = pg.PlotDataItem(
             [],
             [],
@@ -50,6 +53,13 @@ class TimelinePlot(QtWidgets.QWidget):
         self.points = pg.ScatterPlotItem(size=10)
         self.points.setZValue(1)
         self.plot.addItem(self.points)
+        # Vector2Track用のX/Yキーポイント
+        self.points_x = pg.ScatterPlotItem(size=10)
+        self.points_x.setZValue(1)
+        self.plot.addItem(self.points_x)
+        self.points_y = pg.ScatterPlotItem(size=10)
+        self.points_y.setZValue(1)
+        self.plot.addItem(self.points_y)
 
         self.playhead = pg.InfiniteLine(
             pos=0.0, angle=90, movable=False, pen=pg.mkPen(255, 50, 50, 200)
@@ -93,13 +103,27 @@ class TimelinePlot(QtWidgets.QWidget):
         """曲線（補間結果）を再描画。"""
         if self._track is None:
             self.curve_item.setData([], [])
+            self.curve_item_x.setData([], [])
+            self.curve_item_y.setData([], [])
             return
 
         ks = self._track.sorted()
         tmax = max(self._duration_s, max((k.t for k in ks), default=0.0))
         dense_t = np.linspace(0.0, max(1e-3, tmax), 1200)
-        dense_v = evaluate(self._track, dense_t)
-        self.curve_item.setData(dense_t, dense_v)
+        
+        if getattr(self._track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2:
+            # Vector2Track: XとYの2つのカーブを表示
+            dense_vx = evaluate_x(self._track, dense_t)
+            dense_vy = evaluate_y(self._track, dense_t)
+            self.curve_item.setData([], [])  # スカラーカーブは非表示
+            self.curve_item_x.setData(dense_t, dense_vx)
+            self.curve_item_y.setData(dense_t, dense_vy)
+        else:
+            # ScalarTrack: 通常のカーブを表示
+            dense_v = evaluate(self._track, dense_t)
+            self.curve_item.setData(dense_t, dense_v)
+            self.curve_item_x.setData([], [])  # Vector2カーブは非表示
+            self.curve_item_y.setData([], [])
 
     def update_points(self, selected: Set[SelectedKey] | None = None) -> None:
         """キー点およびハンドルを再描画。選択点は強調表示。"""
@@ -109,6 +133,8 @@ class TimelinePlot(QtWidgets.QWidget):
 
         if self._track is None:
             self.points.setData([])
+            self.points_x.setData([])
+            self.points_y.setData([])
             self.handle_points.setData([])
             self.handle_lines.setData([], [])
             return
@@ -121,24 +147,69 @@ class TimelinePlot(QtWidgets.QWidget):
             if sel.component != "key" and sel.item_id is not None
         }
 
-        key_spots = []
-        for k in keys:
-            key_id = id(k)
-            is_sel = key_id in selected_key_ids
-            key_spots.append(
-                {
-                    "pos": (k.t, k.v),
-                    "data": key_id,
-                    "brush": pg.mkBrush(255, 160, 0, 220)
-                    if is_sel
-                    else pg.mkBrush(40, 120, 255, 180),
-                    "size": 12 if is_sel else 10,
-                    "pen": pg.mkPen(180, 100, 0, 220)
-                    if is_sel
-                    else pg.mkPen(0, 60, 160, 200),
-                }
-            )
-        self.points.setData(key_spots)
+        is_vector2 = getattr(self._track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
+        
+        if is_vector2:
+            # Vector2Track: XとYのキーポイントを別々に表示
+            key_spots_x = []
+            key_spots_y = []
+            for k in keys:
+                key_id = id(k)
+                is_sel = key_id in selected_key_ids
+                vx = k.vx if k.vx is not None else 0.0
+                vy = k.vy if k.vy is not None else 0.0
+                
+                key_spots_x.append(
+                    {
+                        "pos": (k.t, vx),
+                        "data": key_id,
+                        "brush": pg.mkBrush(255, 160, 0, 220)
+                        if is_sel
+                        else pg.mkBrush(255, 100, 100, 180),
+                        "size": 12 if is_sel else 10,
+                        "pen": pg.mkPen(180, 100, 0, 220)
+                        if is_sel
+                        else pg.mkPen(200, 50, 50, 200),
+                    }
+                )
+                key_spots_y.append(
+                    {
+                        "pos": (k.t, vy),
+                        "data": key_id,
+                        "brush": pg.mkBrush(255, 160, 0, 220)
+                        if is_sel
+                        else pg.mkBrush(100, 100, 255, 180),
+                        "size": 12 if is_sel else 10,
+                        "pen": pg.mkPen(180, 100, 0, 220)
+                        if is_sel
+                        else pg.mkPen(50, 50, 200, 200),
+                    }
+                )
+            self.points.setData([])  # スカラー用は非表示
+            self.points_x.setData(key_spots_x)
+            self.points_y.setData(key_spots_y)
+        else:
+            # ScalarTrack: 通常のキーポイントを表示
+            key_spots = []
+            for k in keys:
+                key_id = id(k)
+                is_sel = key_id in selected_key_ids
+                key_spots.append(
+                    {
+                        "pos": (k.t, k.v),
+                        "data": key_id,
+                        "brush": pg.mkBrush(255, 160, 0, 220)
+                        if is_sel
+                        else pg.mkBrush(40, 120, 255, 180),
+                        "size": 12 if is_sel else 10,
+                        "pen": pg.mkPen(180, 100, 0, 220)
+                        if is_sel
+                        else pg.mkPen(0, 60, 160, 200),
+                    }
+                )
+            self.points.setData(key_spots)
+            self.points_x.setData([])  # Vector2用は非表示
+            self.points_y.setData([])
 
         if getattr(self._track, "interp", None) == InterpMode.BEZIER:
             handle_spots = []
@@ -195,9 +266,19 @@ class TimelinePlot(QtWidgets.QWidget):
             return
 
         ks = self._track.sorted()
+        is_vector2 = getattr(self._track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
+        
         if ks:
-            vmin = min(k.v for k in ks)
-            vmax = max(k.v for k in ks)
+            if is_vector2:
+                # Vector2Track: XとYの範囲を考慮
+                vx_values = [k.vx if k.vx is not None else 0.0 for k in ks]
+                vy_values = [k.vy if k.vy is not None else 0.0 for k in ks]
+                all_values = vx_values + vy_values
+                vmin = min(all_values)
+                vmax = max(all_values)
+            else:
+                vmin = min(k.v for k in ks)
+                vmax = max(k.v for k in ks)
         else:
             vmin, vmax = -1.0, 1.0
 

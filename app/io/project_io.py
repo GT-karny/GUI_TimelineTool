@@ -3,7 +3,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Iterable, List
 
-from ..core.timeline import Timeline, Track, Keyframe, InterpMode, Handle
+from ..core.timeline import Timeline, Track, Keyframe, InterpMode, Handle, TrackType
 
 
 _HANDLE_FIELD_NAMES = tuple(f.name for f in fields(Handle))
@@ -39,24 +39,37 @@ def _coerce_key_payload(key_payload: dict) -> dict:
         payload["handle_out"] = _deserialize_handle(
             payload.get("handle_out"), default_t=default_t, default_v=default_v
         )
+    # Vector2Track用のvx/vyを処理
+    if "vx" in payload:
+        payload["vx"] = float(payload["vx"]) if payload["vx"] is not None else None
+    if "vy" in payload:
+        payload["vy"] = float(payload["vy"]) if payload["vy"] is not None else None
     return payload
 
 
 def _serialize_track(track: Track) -> dict:
-    return {
+    result = {
         "id": track.track_id,
         "name": track.name,
         "interp": track.interp.value,
-        "keys": [
-            {
-                "t": k.t,
-                "v": k.v,
-                "handle_in": _serialize_handle(k.handle_in),
-                "handle_out": _serialize_handle(k.handle_out),
-            }
-            for k in track.keys
-        ],
+        "track_type": track.track_type.value,
+        "keys": [],
     }
+    for k in track.keys:
+        key_data = {
+            "t": k.t,
+            "v": k.v,
+            "handle_in": _serialize_handle(k.handle_in),
+            "handle_out": _serialize_handle(k.handle_out),
+        }
+        # Vector2Trackの場合はvx/vyも保存
+        if track.track_type == TrackType.VECTOR2:
+            if k.vx is not None:
+                key_data["vx"] = k.vx
+            if k.vy is not None:
+                key_data["vy"] = k.vy
+        result["keys"].append(key_data)
+    return result
 
 
 def save_project(path: str | Path, tl: Timeline, sample_rate_hz: float) -> None:
@@ -82,12 +95,24 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
             interp = InterpMode(interp_raw)
         except ValueError:
             interp = InterpMode.BEZIER
+        
+        # track_typeの読み込み（後方互換性のためデフォルトはSCALAR）
+        track_type_raw = track_obj.get("track_type", TrackType.SCALAR.value)
+        try:
+            track_type = TrackType(track_type_raw)
+        except ValueError:
+            track_type = TrackType.SCALAR
+        
         keys = [Keyframe(**_coerce_key_payload(kv)) for kv in track_obj.get("keys", [])]
         if not keys:
-            keys = [Keyframe(0.0, 0.0)]
+            if track_type == TrackType.VECTOR2:
+                keys = [Keyframe(0.0, 0.0, vx=0.0, vy=0.0)]
+            else:
+                keys = [Keyframe(0.0, 0.0)]
         track = Track(
             name=name,
             interp=interp,
+            track_type=track_type,
             keys=keys,
             track_id=track_obj.get("id"),
             _init_handles=False,
