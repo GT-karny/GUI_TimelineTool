@@ -152,6 +152,7 @@ class TelemetryBridge:
                 period_ns = self._period_ns
                 next_deadline = self._next_deadline_ns
                 payload_format = self.settings.payload_format
+                debug_log = self.settings.debug_log
 
             if not playing:
                 self._wakeup.wait(timeout=0.1)
@@ -189,7 +190,7 @@ class TelemetryBridge:
             payload = self._build_payload_bytes(
                 snapshot, payload_format
             )
-            if self.settings.debug_log:
+            if debug_log:
                 print(f"DEBUG: Sending payload: {len(payload)} bytes")
             self.sender.submit(payload)
 
