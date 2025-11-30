@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional, Set, Tuple
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtGui import QActionGroup, QKeySequence, QUndoCommand, QUndoStack
 import numpy as np
 
@@ -431,6 +431,50 @@ class MainWindow(QtWidgets.QMainWindow):
         # 初期プレイヘッドを同期
         self.playback.set_playhead(0.0)
         self.toolbar.set_loop(self.playback.loop_enabled)
+        
+        # キーボードショートカットの設定
+        self._setup_keyboard_shortcuts()
+
+    def _setup_keyboard_shortcuts(self) -> None:
+        """キーボードショートカットを設定"""
+        # Deleteキー: 選択中のキーフレームを削除
+        delete_shortcut = QtGui.QShortcut(QKeySequence(QtCore.Qt.Key.Key_Delete), self)
+        delete_shortcut.activated.connect(self._on_delete_key_pressed)
+        
+        # Ctrl+C: 選択中のキーフレームの値をコピー
+        copy_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Copy, self)
+        copy_shortcut.activated.connect(self._on_copy_key_pressed)
+        
+        # Ctrl+V: コピー中の値をマウスカーソル位置にペースト
+        paste_shortcut = QtGui.QShortcut(QKeySequence.StandardKey.Paste, self)
+        paste_shortcut.activated.connect(self._on_paste_key_pressed)
+
+    def _on_delete_key_pressed(self) -> None:
+        """Deleteキーが押された時の処理"""
+        if self._key_edit is None:
+            return
+        if self._key_edit.delete_selected_keys():
+            self._refresh_view()
+
+    def _on_copy_key_pressed(self) -> None:
+        """Ctrl+Cが押された時の処理"""
+        if self._key_edit is None:
+            return
+        self._key_edit.copy_selected_keys()
+
+    def _on_paste_key_pressed(self) -> None:
+        """Ctrl+Vが押された時の処理"""
+        if self._key_edit is None or self.plotw is None:
+            return
+        
+        # マウスカーソル位置を取得
+        t = self.plotw.get_mouse_time()
+        if t is None:
+            # マウスカーソルがプロット外の場合はプレイヘッド位置を使用
+            t = self.playback.playhead_s
+        
+        if self._key_edit.paste_at(t) is not None:
+            self._refresh_view()
 
     # -------------------- Toolbar handlers --------------------
     def _on_interp_changed(self, name: str):

@@ -17,6 +17,7 @@ from ..actions.undo_commands import (
 )
 from ..core.timeline import Handle, Keyframe, Timeline, Track, TrackType, initialize_handle_positions
 from .selection import KeyPoint, KeyPosProvider, SelectedKey, SelectionManager
+from .clipboard import copy_keyframe, get_clipboard
 
 
 logger = logging.getLogger(__name__)
@@ -191,6 +192,120 @@ class KeyEditService:
 
         self._drag.reset()
         return True
+
+    # ------------------------------------------------------------------
+    # Copy / paste / delete selected
+    # ------------------------------------------------------------------
+    def copy_selected_keys(self) -> bool:
+        """Copy selected keyframe values to clipboard."""
+        selected = self.selection.selected
+        if not selected:
+            return False
+        
+        # 最初に選択されたキー（キーフレームのみ）をコピー
+        key_selected = [sel for sel in selected if sel.component == "key"]
+        if not key_selected:
+            return False
+        
+        sel = key_selected[0]
+        key = self._resolve_key(sel)
+        if key is None:
+            return False
+        
+        track = self._track_for_id(sel.track_id)
+        if track is None:
+            return False
+        
+        track_type = getattr(track, "track_type", TrackType.SCALAR)
+        copy_keyframe(key, track_type)
+        return True
+
+    def paste_at(self, time: float) -> Optional[Keyframe]:
+        """Paste clipboard value at specified time."""
+        clipboard = get_clipboard()
+        if clipboard is None:
+            return None
+        
+        track_id = self._active_track_id()
+        if track_id is None:
+            return None
+        
+        track = self._track_for_id(track_id)
+        if track is None:
+            return None
+        
+        track_type = getattr(track, "track_type", TrackType.SCALAR)
+        v, vx, vy = clipboard.to_keyframe_value()
+        
+        # トラックタイプが一致する場合のみペースト
+        if track_type != clipboard.track_type:
+            return None
+        
+        if track_type == TrackType.VECTOR2:
+            # Vector2Trackの場合
+            if vx is None or vy is None:
+                return None
+            key = self.add_at(time, v)
+            if key is not None:
+                key.set_value_x(vx)
+                key.set_value_y(vy)
+        else:
+            # ScalarTrackの場合
+            key = self.add_at(time, v)
+        
+        return key
+
+    def delete_selected_keys(self) -> bool:
+        """Delete all selected keyframes."""
+        selected = self.selection.selected
+        if not selected:
+            return False
+        
+        # キーフレームのみを削除対象とする
+        key_selected = [sel for sel in selected if sel.component == "key"]
+        if not key_selected:
+            return False
+        
+        # トラックごとにグループ化
+        keys_by_track: dict[str, list[Keyframe]] = {}
+        for sel in key_selected:
+            key = self._resolve_key(sel)
+            if key is None:
+                continue
+            track_id = sel.track_id
+            if track_id not in keys_by_track:
+                keys_by_track[track_id] = []
+            keys_by_track[track_id].append(key)
+        
+        # 各トラックのキーを削除
+        deleted = False
+        for track_id, keys in keys_by_track.items():
+            if not keys:
+                continue
+            
+            # 選択から削除
+            for sel in key_selected:
+                if sel.track_id == track_id:
+                    self.selection.discard(sel.track_id, sel.key_id)
+            
+            # Undoコマンドで削除
+            if self._push_undo is not None:
+                cmd = DeleteKeysCommand(self.timeline, track_id, keys)
+                try:
+                    self._push_undo(cmd)
+                    deleted = True
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("Failed to push DeleteKeysCommand to undo stack")
+            else:
+                # Fallback: 直接削除
+                track = self._track_for_id(track_id)
+                if track is not None:
+                    for key in keys:
+                        if key in track.keys:
+                            track.keys.remove(key)
+                    deleted = True
+        
+        return deleted
 
     # ------------------------------------------------------------------
     # Add / delete helpers

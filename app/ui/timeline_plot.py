@@ -1,7 +1,7 @@
 # ui/timeline_plot.py
 from __future__ import annotations
 from typing import Optional, Set
-from PySide6 import QtWidgets
+from PySide6 import QtWidgets, QtGui, QtCore
 import pyqtgraph as pg
 import numpy as np
 
@@ -281,6 +281,18 @@ class TimelinePlot(QtWidgets.QWidget):
         else:
             self.handle_points.setData([])
             self.handle_lines.setData([], [])
+
+    # ---- マウス位置取得 ----
+    def get_mouse_time(self) -> Optional[float]:
+        """マウスカーソル位置の時間（t）を取得。カーソルがプロット外の場合はNoneを返す。"""
+        if self.plot is None:
+            return None
+        mouse_pos = self.plot.mapFromGlobal(QtGui.QCursor().pos())
+        if not self.plot.rect().contains(mouse_pos):
+            return None
+        scene_pos = self.plot.mapToScene(mouse_pos)
+        view_pos = self.viewbox.mapSceneToView(scene_pos)
+        return float(max(0.0, view_pos.x()))
 
     # ---- レンジ制御 ----
     def fit_x(self, padding: float = 0.02) -> None:
