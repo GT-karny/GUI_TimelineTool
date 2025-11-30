@@ -24,6 +24,14 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         self._key = key
         self._on_update = on_update
         self._updating = False
+        
+        # 基準レンジ（初期レンジ、ズーム計算の基準）
+        self._base_x_range: tuple[float, float] = (-1.0, 1.0)
+        self._base_y_range: tuple[float, float] = (-1.0, 1.0)
+        # 現在のズームレベル（1.0が基準）
+        self._zoom_level: float = 1.0
+        # XY縮尺シンクロモード
+        self._sync_xy_scale: bool = True
 
         self.setWindowTitle(f"Edit Vector2 Key - {track.name}")
         self.setMinimumSize(400, 400)
@@ -97,6 +105,38 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         controls_layout.addWidget(QtWidgets.QLabel(f"{label_y}:"))
         controls_layout.addWidget(self.y_spin)
         controls_layout.addStretch()
+        
+        # 縮尺コントロール
+        zoom_layout = QtWidgets.QHBoxLayout()
+        zoom_layout.addWidget(QtWidgets.QLabel("Zoom:"))
+        
+        # 縮尺スライダー（0.1倍～10倍、1000段階で制御）
+        self.zoom_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.zoom_slider.setMinimum(100)  # 0.1倍
+        self.zoom_slider.setMaximum(10000)  # 10倍
+        self.zoom_slider.setValue(1000)  # 1.0倍
+        self.zoom_slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setTickInterval(1000)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
+        zoom_layout.addWidget(self.zoom_slider)
+        
+        # ズーム値表示ラベル
+        self.zoom_label = QtWidgets.QLabel("1.0x")
+        self.zoom_label.setMinimumWidth(50)
+        zoom_layout.addWidget(self.zoom_label)
+        
+        # XY縮尺シンクロモードスイッチ
+        self.sync_xy_checkbox = QtWidgets.QCheckBox("Sync XY")
+        self.sync_xy_checkbox.setChecked(True)
+        self.sync_xy_checkbox.stateChanged.connect(self._on_sync_xy_changed)
+        zoom_layout.addWidget(self.sync_xy_checkbox)
+        
+        # 視点リセットボタン
+        self.reset_view_btn = QtWidgets.QPushButton("Reset View")
+        self.reset_view_btn.clicked.connect(self._reset_view)
+        zoom_layout.addWidget(self.reset_view_btn)
+        
+        controls_layout.addLayout(zoom_layout)
 
         buttons_layout = QtWidgets.QHBoxLayout()
         self.btn_ok = QtWidgets.QPushButton("OK")
@@ -120,6 +160,12 @@ class Vector2EditorWindow(QtWidgets.QDialog):
 
         # レンジを適切に設定
         self._fit_range()
+        
+        # 基準レンジを保存
+        x_range = self.plot.plotItem.vb.viewRange()[0]
+        y_range = self.plot.plotItem.vb.viewRange()[1]
+        self._base_x_range = (x_range[0], x_range[1])
+        self._base_y_range = (y_range[0], y_range[1])
 
     def _update_other_points(self) -> None:
         """他のキーを表示（参考用）。"""
@@ -174,6 +220,14 @@ class Vector2EditorWindow(QtWidgets.QDialog):
 
         self.plot.setXRange(x_min, x_max)
         self.plot.setYRange(y_min, y_max)
+        
+        # 基準レンジを更新
+        self._base_x_range = (x_min, x_max)
+        self._base_y_range = (y_min, y_max)
+        self._zoom_level = 1.0
+        # スライダーを1.0倍にリセット
+        self.zoom_slider.setValue(1000)
+        self.zoom_label.setText("1.0x")
 
     def eventFilter(self, obj, event) -> bool:
         """マウスイベントをフィルタリングしてドラッグ処理。"""
@@ -241,4 +295,115 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         y = self.y_spin.value()
         self.current_point.setData([x], [y])
         self.draggable_point.setData([x], [y])
+    
+    def _on_zoom_changed(self, value: int) -> None:
+        """ズームスライダーが変更された時の処理。"""
+        # スライダー値をズームレベルに変換（100 = 0.1倍、1000 = 1.0倍、10000 = 10倍）
+        self._zoom_level = value / 1000.0
+        self.zoom_label.setText(f"{self._zoom_level:.2f}x")
+        
+        # 基準レンジの中心を計算
+        base_x_center = (self._base_x_range[0] + self._base_x_range[1]) / 2.0
+        base_y_center = (self._base_y_range[0] + self._base_y_range[1]) / 2.0
+        base_x_range = self._base_x_range[1] - self._base_x_range[0]
+        base_y_range = self._base_y_range[1] - self._base_y_range[0]
+        
+        if self._sync_xy_scale:
+            # シンクロモード: X/Yを同じ倍率で変更
+            new_x_range = base_x_range / self._zoom_level
+            new_y_range = base_y_range / self._zoom_level
+            
+            new_x_min = base_x_center - new_x_range / 2.0
+            new_x_max = base_x_center + new_x_range / 2.0
+            new_y_min = base_y_center - new_y_range / 2.0
+            new_y_max = base_y_center + new_y_range / 2.0
+            
+            self.plot.setXRange(new_x_min, new_x_max)
+            self.plot.setYRange(new_y_min, new_y_max)
+        else:
+            # 非シンクロモード: X/Yを独立して変更
+            new_x_range = base_x_range / self._zoom_level
+            new_y_range = base_y_range / self._zoom_level
+            
+            new_x_min = base_x_center - new_x_range / 2.0
+            new_x_max = base_x_center + new_x_range / 2.0
+            new_y_min = base_y_center - new_y_range / 2.0
+            new_y_max = base_y_center + new_y_range / 2.0
+            
+            self.plot.setXRange(new_x_min, new_x_max)
+            self.plot.setYRange(new_y_min, new_y_max)
+    
+    def _on_sync_xy_changed(self, state: int) -> None:
+        """XY縮尺シンクロモードが変更された時の処理。"""
+        self._sync_xy_scale = (state == QtCore.Qt.CheckState.Checked.value)
+        # ズームレベルを再適用
+        self._on_zoom_changed(self.zoom_slider.value())
+    
+    def _reset_view(self) -> None:
+        """視点をリセット: 0,0と最遠点を含むレンジを設定。"""
+        if self._track.track_type != TrackType.VECTOR2:
+            return
+        
+        all_keys = self._track.keys
+        if not all_keys:
+            self.plot.setXRange(-1.0, 1.0)
+            self.plot.setYRange(-1.0, 1.0)
+            self._base_x_range = (-1.0, 1.0)
+            self._base_y_range = (-1.0, 1.0)
+            self._zoom_level = 1.0
+            self.zoom_slider.setValue(1000)
+            self.zoom_label.setText("1.0x")
+            return
+        
+        # 0,0の点
+        origin = (0.0, 0.0)
+        
+        # 全キーフレームから原点(0,0)からの距離が最大の点を計算
+        max_distance = 0.0
+        farthest_point = origin
+        
+        for key in all_keys:
+            vx = key.vx if key.vx is not None else 0.0
+            vy = key.vy if key.vy is not None else 0.0
+            distance = (vx ** 2 + vy ** 2) ** 0.5
+            if distance > max_distance:
+                max_distance = distance
+                farthest_point = (vx, vy)
+        
+        # 0,0と最遠点を含む最小の矩形を計算
+        x_values = [0.0, farthest_point[0]]
+        y_values = [0.0, farthest_point[1]]
+        
+        x_min, x_max = min(x_values), max(x_values)
+        y_min, y_max = min(y_values), max(y_values)
+        
+        # 余白を追加（10%）
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        
+        if x_range < 1e-6:
+            x_min, x_max = -1.0, 1.0
+        else:
+            padding = x_range * 0.1
+            x_min -= padding
+            x_max += padding
+        
+        if y_range < 1e-6:
+            y_min, y_max = -1.0, 1.0
+        else:
+            padding = y_range * 0.1
+            y_min -= padding
+            y_max += padding
+        
+        # レンジを設定
+        self.plot.setXRange(x_min, x_max)
+        self.plot.setYRange(y_min, y_max)
+        
+        # 基準レンジを更新
+        self._base_x_range = (x_min, x_max)
+        self._base_y_range = (y_min, y_max)
+        self._zoom_level = 1.0
+        # スライダーを1.0倍にリセット
+        self.zoom_slider.setValue(1000)
+        self.zoom_label.setText("1.0x")
 
