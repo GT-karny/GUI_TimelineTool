@@ -79,3 +79,77 @@ def test_active_track_commands_affect_selected_row(qtbot):
 
     window.close()
     qtbot.wait(20)
+
+
+def test_add_keys_at_playhead_all_tracks(qtbot):
+    """複数トラックがある場合、Add Keys at Playheadですべてのトラックにキーが追加されることを確認"""
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(window.isVisible)
+    
+    # 初期状態を確認
+    initial_track_count = len(window.timeline.tracks)
+    assert initial_track_count >= 1
+    
+    # 2つ目のトラックを追加（SCALAR）
+    window.undo.push(AddTrackCommand(window.timeline))
+    window._refresh_view()
+    qtbot.wait(50)
+    
+    # 3つ目のトラックを追加（VECTOR2）
+    from app.core.timeline import Track, TrackType
+    vector2_track = Track(track_type=TrackType.VECTOR2)
+    window.undo.push(AddTrackCommand(window.timeline, track=vector2_track))
+    window._refresh_view()
+    qtbot.wait(50)
+    
+    # トラック数を確認
+    assert len(window.timeline.tracks) >= 3
+    
+    # 各トラックのキー数を記録
+    key_counts_before = {track.track_id: len(track.keys) for track in window.timeline.tracks}
+    
+    # プレイヘッド位置を設定
+    playhead_time = 1.5
+    window.plotw.playhead.setValue(playhead_time)
+    qtbot.wait(50)
+    
+    # Add Keys at Playheadを実行
+    window._on_add_key_at_playhead()
+    qtbot.wait(50)
+    
+    # すべてのトラックにキーが追加されたことを確認
+    for track in window.timeline.tracks:
+        key_count_after = len(track.keys)
+        key_count_before = key_counts_before[track.track_id]
+        assert key_count_after == key_count_before + 1, \
+            f"Track {track.track_id} ({track.name}): expected {key_count_before + 1} keys, got {key_count_after}"
+        
+        # 追加されたキーが正しい時刻にあることを確認
+        keys_at_time = [k for k in track.keys if abs(k.t - playhead_time) < 1e-6]
+        assert len(keys_at_time) == 1, \
+            f"Track {track.track_id}: expected 1 key at time {playhead_time}, found {len(keys_at_time)}"
+    
+    # Undoが正しく動作することを確認
+    window.undo.undo()
+    qtbot.wait(50)
+    
+    for track in window.timeline.tracks:
+        key_count_after_undo = len(track.keys)
+        key_count_before = key_counts_before[track.track_id]
+        assert key_count_after_undo == key_count_before, \
+            f"Track {track.track_id}: undo failed, expected {key_count_before} keys, got {key_count_after_undo}"
+    
+    # Redoが正しく動作することを確認
+    window.undo.redo()
+    qtbot.wait(50)
+    
+    for track in window.timeline.tracks:
+        key_count_after_redo = len(track.keys)
+        key_count_before = key_counts_before[track.track_id]
+        assert key_count_after_redo == key_count_before + 1, \
+            f"Track {track.track_id}: redo failed, expected {key_count_before + 1} keys, got {key_count_after_redo}"
+    
+    window.close()
+    qtbot.wait(20)
