@@ -15,7 +15,7 @@ from ..core.timeline import (
     TrackType,
     initialize_handle_positions,
 )
-from ..core.interpolation import evaluate
+from ..core.interpolation import evaluate, evaluate_x, evaluate_y
 from ..services.export_dialog import export_timeline_csv_via_dialog
 from .controllers import ProjectController, TelemetryController
 from .track_container import TrackContainer
@@ -25,6 +25,7 @@ from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
 from .vector2_editor import Vector2EditorWindow
 from .telemetry_panel import TelemetryPanel
+from .parameter_study_window import ParameterStudyWindow
 from ..telemetry.settings import TelemetrySettings
 
 from ..interaction.selection import SelectionManager, SelectedKey
@@ -63,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._key_edit: Optional[KeyEditService] = None
         self.mouse: Optional[MouseController] = None
         self.plotw: Optional[TimelinePlot] = None
+        self._parameter_study_window: Optional[ParameterStudyWindow] = None
 
         self._init_model_state()
         self._init_toolbar()
@@ -510,16 +512,99 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_add_key_at_playhead(self):
         t = float(self.plotw.playhead.value())
-        # 仕様：補間値を初期値に
-        track = self._current_track()
-        track_id = track.track_id
-        v = float(evaluate(track, np.array([t]))[0])
-        cmd = AddKeyCommand(self.timeline, track_id, t, v)
-        self.undo.push(cmd)
-        # 直近追加キーを選択（redoで追加されるので参照は cmd 内の k）
-        kf = cmd.k
-        if kf is not None:
-            self.sel.set_single(track_id, id(kf))
+        if t < 0.0:
+            t = 0.0
+        
+        # 複数のキーを一度に追加するための親コマンド
+        # 親コマンドに明示的にredo()を実装して、子コマンドのredo()が確実に呼ばれるようにする
+        class AddKeysAtPlayheadCommand(QUndoCommand):
+            def __init__(self, label: str = "Add Keys at Playhead"):
+                super().__init__(label)
+                self._child_commands: List[AddKeyCommand] = []
+            
+            def add_child(self, cmd: AddKeyCommand) -> None:
+                """子コマンドを追加"""
+                self._child_commands.append(cmd)
+                cmd.setParent(self)
+            
+            def redo(self) -> None:
+                """すべての子コマンドのredo()を実行"""
+                for cmd in self._child_commands:
+                    cmd.redo()
+            
+            def undo(self) -> None:
+                """すべての子コマンドのundo()を逆順で実行"""
+                for cmd in reversed(self._child_commands):
+                    cmd.undo()
+        
+        root_cmd = AddKeysAtPlayheadCommand("Add Keys at Playhead")
+        first_cmd = None
+        track_count = 0
+        cmd_count = 0
+        
+        # すべてのトラックをループしてキーを追加
+        tracks_list = list(self.timeline.iter_tracks())
+        logger.debug("Add Keys at Playhead: Found %d tracks", len(tracks_list))
+        
+        for track in tracks_list:
+            track_count += 1
+            try:
+                logger.debug("Processing track %d: id=%s, type=%s, name=%s", 
+                           track_count, track.track_id, track.track_type, track.name)
+                
+                if track.track_type == TrackType.SCALAR:
+                    # 補間値を初期値に
+                    v = float(evaluate(track, np.array([t]))[0])
+                    logger.debug("  SCALAR track: evaluated value = %f at t = %f", v, t)
+                    cmd = AddKeyCommand(
+                        self.timeline,
+                        track.track_id,
+                        t,
+                        v,
+                        label=f"Add Key: {track.name}",
+                    )
+                    root_cmd.add_child(cmd)
+                    cmd_count += 1
+                elif track.track_type == TrackType.VECTOR2:
+                    # X/Y成分を取得
+                    vx = float(evaluate_x(track, np.array([t]))[0])
+                    vy = float(evaluate_y(track, np.array([t]))[0])
+                    logger.debug("  VECTOR2 track: evaluated vx = %f, vy = %f at t = %f", vx, vy, t)
+                    cmd = AddKeyCommand(
+                        self.timeline,
+                        track.track_id,
+                        t,
+                        0.0,  # vは0.0（Vector2Trackでは使用しない）
+                        vx=vx,
+                        vy=vy,
+                        label=f"Add Key: {track.name}",
+                    )
+                    root_cmd.add_child(cmd)
+                    cmd_count += 1
+                else:
+                    logger.warning("  Unknown track type: %s, skipping", track.track_type)
+                    continue
+                
+                # 最初のコマンドを保存
+                if first_cmd is None:
+                    first_cmd = cmd
+                    logger.debug("  Set as first command")
+            except Exception as e:
+                logger.exception("Failed to create AddKeyCommand for track %s: %s", track.track_id, e)
+                continue
+        
+        logger.debug("Add Keys at Playhead: Processed %d tracks, created %d commands, root_cmd.childCount() = %d",
+                    track_count, cmd_count, len(root_cmd._child_commands))
+        
+        if len(root_cmd._child_commands) > 0:
+            self.undo.push(root_cmd)
+            logger.debug("Pushed root_cmd to undo stack, first_cmd.k = %s", first_cmd.k if first_cmd else None)
+            # 最初のトラックのキーを選択（push()の後、redo()が呼ばれてkが設定されている）
+            if first_cmd is not None and first_cmd.k is not None:
+                self.sel.set_single(first_cmd.track_id, id(first_cmd.k))
+                logger.debug("Selected first key: track_id=%s, key_id=%d", first_cmd.track_id, id(first_cmd.k))
+        else:
+            logger.warning("Add Keys at Playhead: No commands to push (childCount = 0)")
         self._refresh_view()
 
     def _on_delete_selected(self):
@@ -768,6 +853,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
 
+        self._build_tools_menu()
         self._build_telemetry_menu()
 
     def _build_telemetry_menu(self) -> None:
@@ -821,3 +907,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_debug_log_toggled(self, checked: bool) -> None:
         self.telemetry_controller.set_debug_log(checked)
         self._sync_telemetry_menu_state()
+
+    def _build_tools_menu(self) -> None:
+        """Toolsメニューを構築。"""
+        menu = self.menuBar().addMenu("&Tools")
+
+        self.act_parameter_study = menu.addAction("Parameter Study Mode")
+        self.act_parameter_study.triggered.connect(self._on_parameter_study_mode)
+        self.addAction(self.act_parameter_study)
+
+    def _on_parameter_study_mode(self) -> None:
+        """パラメータスタディモードウィンドウを開く。"""
+        if self._parameter_study_window is None or not self._parameter_study_window.isVisible():
+            self._parameter_study_window = ParameterStudyWindow(
+                timeline=self.timeline,
+                telemetry_bridge=self.telemetry_bridge,
+                parent=self,
+                playhead_getter=lambda: self.playback.playhead,
+                undo_stack=self.undo,
+            )
+            self._parameter_study_window.destroyed.connect(
+                lambda: setattr(self, "_parameter_study_window", None)
+            )
+            self._parameter_study_window.show()
+        else:
+            self._parameter_study_window.raise_()
+            self._parameter_study_window.activateWindow()

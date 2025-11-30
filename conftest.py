@@ -74,11 +74,11 @@ def _project_data_paths() -> Dict[str, Path]:
 @pytest.fixture(params=("multitrack", "legacy_single"))
 def loaded_project(request, _project_data_paths) -> tuple:
     path = _project_data_paths[request.param]
-    timeline, sample_rate = load_project(path)
+    timeline, sample_rate, _ = load_project(path)
     return timeline, sample_rate, request.param
 
 
 @pytest.fixture
 def multitrack_project(_project_data_paths) -> tuple:
-    timeline, sample_rate = load_project(_project_data_paths["multitrack"])
+    timeline, sample_rate, _ = load_project(_project_data_paths["multitrack"])
     return timeline, sample_rate

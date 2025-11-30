@@ -1,7 +1,7 @@
 import json
 from dataclasses import fields
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from ..core.timeline import Timeline, Track, Keyframe, InterpMode, Handle, TrackType
 
@@ -78,7 +78,13 @@ def _serialize_track(track: Track) -> dict:
     return result
 
 
-def save_project(path: str | Path, tl: Timeline, sample_rate_hz: float) -> None:
+def save_project(
+    path: str | Path,
+    tl: Timeline,
+    sample_rate_hz: float,
+    *,
+    parameter_study_ranges: Optional[dict] = None,
+) -> None:
     tracks_payload = [_serialize_track(track) for track in tl.tracks]
     obj = {
         "duration_s": tl.duration_s,
@@ -89,6 +95,11 @@ def save_project(path: str | Path, tl: Timeline, sample_rate_hz: float) -> None:
         legacy_track = tracks_payload[0].copy()
         legacy_track.pop("id", None)
         obj["track"] = legacy_track
+    
+    # パラメータスタディ値域を保存
+    if parameter_study_ranges:
+        obj["parameter_study"] = {"ranges": parameter_study_ranges}
+    
     Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -136,7 +147,7 @@ def _load_tracks(data: Iterable[dict]) -> List[Track]:
     return tracks
 
 
-def load_project(path: str | Path) -> tuple[Timeline, float]:
+def load_project(path: str | Path) -> tuple[Timeline, float, Optional[dict]]:
     obj = json.loads(Path(path).read_text(encoding="utf-8"))
     sample_rate = float(obj.get("sample_rate_hz", 90.0))
 
@@ -148,4 +159,10 @@ def load_project(path: str | Path) -> tuple[Timeline, float]:
 
     tracks = _load_tracks(tracks_data or [])
     timeline = Timeline(duration_s=float(obj.get("duration_s", 10.0)), tracks=tracks)
-    return timeline, sample_rate
+    
+    # パラメータスタディ値域を読み込み
+    parameter_study_ranges = None
+    if "parameter_study" in obj and "ranges" in obj["parameter_study"]:
+        parameter_study_ranges = obj["parameter_study"]["ranges"]
+    
+    return timeline, sample_rate, parameter_study_ranges

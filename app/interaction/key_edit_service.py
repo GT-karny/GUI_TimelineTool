@@ -118,8 +118,27 @@ class KeyEditService:
             if handle is None:
                 return False
             
-            # 時間軸は同期して更新（表示オフセットは表示のみに影響し、実際の値には影響しない）
-            handle.t = float(new_t)
+            # Vector2Trackの場合、表示オフセットを削除する必要がある
+            track = self._track_for_id(key_point.track_id)
+            is_vector2 = track is not None and getattr(track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
+            actual_t = new_t
+            
+            if is_vector2 and (key_point.component.endswith("_x") or key_point.component.endswith("_y")):
+                # 表示オフセットを計算（pos_provider.pyと同じロジック）
+                if hasattr(self.provider, 'vb'):
+                    x_range = self.provider.vb.viewRange()[0]
+                    time_span = x_range[1] - x_range[0]
+                    display_offset = max(0.005, time_span * 0.005)  # 最小0.005秒
+                    
+                    # Xハンドルは左にオフセットされているので、オフセットを追加
+                    # Yハンドルは右にオフセットされているので、オフセットを削除
+                    if key_point.component.endswith("_x"):
+                        actual_t = new_t + display_offset
+                    elif key_point.component.endswith("_y"):
+                        actual_t = new_t - display_offset
+            
+            # 時間軸は同期して更新（表示オフセットを削除した実際の値を使用）
+            handle.t = float(actual_t)
             # Vector2Trackの場合、component名からX/Yを判定して値を更新
             if key_point.component.endswith("_x"):
                 handle.vx = float(new_v)

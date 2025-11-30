@@ -35,6 +35,8 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
         *,
         handle_in: Handle | Sequence[float] | Tuple[float, float] | None = None,
         handle_out: Handle | Sequence[float] | Tuple[float, float] | None = None,
+        vx: float | None = None,
+        vy: float | None = None,
         label: str = "Add Key",
         parent: Optional[QUndoCommand] = None,
     ):
@@ -45,6 +47,8 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
         self.t, self.v = float(t), float(v)
         self._handle_in = handle_in
         self._handle_out = handle_out
+        self._vx = float(vx) if vx is not None else None
+        self._vy = float(vy) if vy is not None else None
 
     def _clone_handle_data(self, data, *, fallback_t: float, fallback_v: float) -> Handle:
         if data is None:
@@ -68,7 +72,13 @@ class AddKeyCommand(QUndoCommand, _ClampMixin):
             handle_out = self._clone_handle_data(
                 self._handle_out, fallback_t=self.t, fallback_v=self.v
             )
-            self.k = Keyframe(self.t, self.v, handle_in=handle_in, handle_out=handle_out)
+            self.k = Keyframe(
+                self.t, self.v,
+                handle_in=handle_in,
+                handle_out=handle_out,
+                vx=self._vx,
+                vy=self._vy,
+            )
         appended = False
         if self.k not in track.keys:
             track.keys.append(self.k)

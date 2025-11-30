@@ -78,6 +78,24 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         )
         self.plot.addItem(self.other_points)
 
+        # x=0の垂直基準線
+        self.x_zero_line = pg.InfiniteLine(
+            pos=0.0,
+            angle=90,
+            movable=False,
+            pen=pg.mkPen(255, 200, 0, 200, width=2),  # 目立つ黄色
+        )
+        self.plot.addItem(self.x_zero_line)
+
+        # y=0の水平基準線
+        self.y_zero_line = pg.InfiniteLine(
+            pos=0.0,
+            angle=0,
+            movable=False,
+            pen=pg.mkPen(255, 200, 0, 200, width=2),  # 目立つ黄色
+        )
+        self.plot.addItem(self.y_zero_line)
+
         layout.addWidget(self.plot)
 
         # コントロール
