@@ -25,6 +25,7 @@ from .timeline_plot import TimelinePlot
 from .inspector import KeyInspector  # ★ 追加
 from .vector2_editor import Vector2EditorWindow
 from .telemetry_panel import TelemetryPanel
+from .parameter_study_window import ParameterStudyWindow
 from ..telemetry.settings import TelemetrySettings
 
 from ..interaction.selection import SelectionManager, SelectedKey
@@ -63,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._key_edit: Optional[KeyEditService] = None
         self.mouse: Optional[MouseController] = None
         self.plotw: Optional[TimelinePlot] = None
+        self._parameter_study_window: Optional[ParameterStudyWindow] = None
 
         self._init_model_state()
         self._init_toolbar()
@@ -768,6 +770,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for act in (self.act_new, self.act_load, self.act_save, self.act_save_as):
             self.addAction(act)
 
+        self._build_tools_menu()
         self._build_telemetry_menu()
 
     def _build_telemetry_menu(self) -> None:
@@ -821,3 +824,27 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_debug_log_toggled(self, checked: bool) -> None:
         self.telemetry_controller.set_debug_log(checked)
         self._sync_telemetry_menu_state()
+
+    def _build_tools_menu(self) -> None:
+        """Toolsメニューを構築。"""
+        menu = self.menuBar().addMenu("&Tools")
+
+        self.act_parameter_study = menu.addAction("Parameter Study Mode")
+        self.act_parameter_study.triggered.connect(self._on_parameter_study_mode)
+        self.addAction(self.act_parameter_study)
+
+    def _on_parameter_study_mode(self) -> None:
+        """パラメータスタディモードウィンドウを開く。"""
+        if self._parameter_study_window is None or not self._parameter_study_window.isVisible():
+            self._parameter_study_window = ParameterStudyWindow(
+                timeline=self.timeline,
+                telemetry_bridge=self.telemetry_bridge,
+                parent=self,
+            )
+            self._parameter_study_window.destroyed.connect(
+                lambda: setattr(self, "_parameter_study_window", None)
+            )
+            self._parameter_study_window.show()
+        else:
+            self._parameter_study_window.raise_()
+            self._parameter_study_window.activateWindow()
