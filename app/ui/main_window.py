@@ -281,7 +281,50 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sel.retain_tracks(r.track.track_id for r in self.track_container.rows)
 
     def _on_request_add_track(self) -> None:
-        cmd = AddTrackCommand(self.timeline)
+        """トラック追加時にタイプを選択するダイアログを表示。"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox, QButtonGroup, QRadioButton
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Track")
+        dialog.setMinimumWidth(250)
+        
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QtWidgets.QLabel("Select track type:"))
+        
+        button_group = QButtonGroup(dialog)
+        scalar_radio = QRadioButton("Scalar (1D)")
+        vector2_radio = QRadioButton("Vector2 (2D)")
+        scalar_radio.setChecked(True)  # デフォルトはScalar
+        
+        button_group.addButton(scalar_radio, 0)
+        button_group.addButton(vector2_radio, 1)
+        
+        layout.addWidget(scalar_radio)
+        layout.addWidget(vector2_radio)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # 選択されたタイプに応じてTrackを作成
+        if vector2_radio.isChecked():
+            # Vector2Trackを作成
+            new_track = Track(track_type=TrackType.VECTOR2)
+            # デフォルトキーをVector2用に設定
+            new_track.keys = [
+                Keyframe(0.0, 0.0, vx=0.0, vy=0.0),
+                Keyframe(5.0, 0.0, vx=0.0, vy=0.0),
+            ]
+        else:
+            # ScalarTrackを作成（デフォルト）
+            new_track = Track(track_type=TrackType.SCALAR)
+        
+        cmd = AddTrackCommand(self.timeline, track=new_track)
         self.undo.push(cmd)
         self._refresh_view()
 

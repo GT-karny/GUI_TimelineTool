@@ -150,44 +150,30 @@ class TimelinePlot(QtWidgets.QWidget):
         is_vector2 = getattr(self._track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
         
         if is_vector2:
-            # Vector2Track: XとYのキーポイントを別々に表示
-            key_spots_x = []
-            key_spots_y = []
+            # Vector2Track: キーポイントは0の位置に表示（タイミングを示すため）
+            # XとYのカーブは通常通り表示されるが、キーポイントは時間軸上で0の位置
+            key_spots = []
             for k in keys:
                 key_id = id(k)
                 is_sel = key_id in selected_key_ids
-                vx = k.vx if k.vx is not None else 0.0
-                vy = k.vy if k.vy is not None else 0.0
                 
-                key_spots_x.append(
+                # キーポイントは0の位置に表示（タイミングを表す）
+                key_spots.append(
                     {
-                        "pos": (k.t, vx),
+                        "pos": (k.t, 0.0),
                         "data": key_id,
                         "brush": pg.mkBrush(255, 160, 0, 220)
                         if is_sel
-                        else pg.mkBrush(255, 100, 100, 180),
+                        else pg.mkBrush(200, 200, 200, 180),
                         "size": 12 if is_sel else 10,
                         "pen": pg.mkPen(180, 100, 0, 220)
                         if is_sel
-                        else pg.mkPen(200, 50, 50, 200),
+                        else pg.mkPen(150, 150, 150, 200),
                     }
                 )
-                key_spots_y.append(
-                    {
-                        "pos": (k.t, vy),
-                        "data": key_id,
-                        "brush": pg.mkBrush(255, 160, 0, 220)
-                        if is_sel
-                        else pg.mkBrush(100, 100, 255, 180),
-                        "size": 12 if is_sel else 10,
-                        "pen": pg.mkPen(180, 100, 0, 220)
-                        if is_sel
-                        else pg.mkPen(50, 50, 200, 200),
-                    }
-                )
-            self.points.setData([])  # スカラー用は非表示
-            self.points_x.setData(key_spots_x)
-            self.points_y.setData(key_spots_y)
+            self.points.setData(key_spots)  # タイミングを表す点を0の位置に表示
+            self.points_x.setData([])  # X/Yの個別ポイントは非表示
+            self.points_y.setData([])
         else:
             # ScalarTrack: 通常のキーポイントを表示
             key_spots = []
@@ -225,9 +211,16 @@ class TimelinePlot(QtWidgets.QWidget):
                         continue
                     handle_id = id(handle)
                     is_handle_sel = handle_id in selected_handle_ids
+                    # Vector2Trackの場合、ハンドルも0の位置に表示
+                    if is_vector2:
+                        handle_pos = (handle.t, 0.0)
+                        key_pos_v = 0.0
+                    else:
+                        handle_pos = (handle.t, handle.v)
+                        key_pos_v = k.v
                     handle_spots.append(
                         {
-                            "pos": (handle.t, handle.v),
+                            "pos": handle_pos,
                             "data": (component, key_id, handle_id),
                             "brush": pg.mkBrush(255, 200, 80, 220)
                             if is_handle_sel
@@ -239,7 +232,7 @@ class TimelinePlot(QtWidgets.QWidget):
                         }
                     )
                     line_x.extend([k.t, handle.t, float("nan")])
-                    line_y.extend([k.v, handle.v, float("nan")])
+                    line_y.extend([key_pos_v, handle_pos[1], float("nan")])
             self.handle_points.setData(handle_spots)
             if line_x and line_y:
                 self.handle_lines.setData(line_x, line_y)

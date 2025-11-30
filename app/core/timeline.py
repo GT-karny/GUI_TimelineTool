@@ -170,10 +170,16 @@ def initialize_handle_positions(
     prev_key = keys[idx - 1] if idx > 0 else None
     next_key = keys[idx + 1] if idx + 1 < len(keys) else None
 
+    is_vector2 = getattr(track, "track_type", TrackType.SCALAR) == TrackType.VECTOR2
+    
     def _needs_adjust(handle: Handle | None) -> bool:
         if handle is None:
             return False
-        return abs(handle.t - key.t) < eps and abs(handle.v - key.v) < eps
+        # Vector2Trackの場合、ハンドルの値は0ベースで判定
+        if is_vector2:
+            return abs(handle.t - key.t) < eps and abs(handle.v - 0.0) < eps
+        else:
+            return abs(handle.t - key.t) < eps and abs(handle.v - key.v) < eps
 
     def _fallback_span() -> float:
         if len(keys) < 2:
@@ -189,7 +195,11 @@ def initialize_handle_positions(
             return
 
         target_t = key.t
-        target_v = key.v
+        # Vector2Trackの場合、ハンドルの値は0ベースで初期化
+        if is_vector2:
+            target_v = 0.0
+        else:
+            target_v = key.v
 
         if direction == "in":
             source = prev_key
@@ -205,45 +215,72 @@ def initialize_handle_positions(
             segment = fallback_source
 
         if segment is not None:
-            if direction == "in" and segment.t > key.t:
-                span_t = segment.t - key.t
-                slope = (segment.v - key.v) / span_t
-                dt = span_t * fraction
-                target_t = key.t - dt
-                target_v = key.v - slope * dt
-            elif direction == "out" and segment.t < key.t:
-                span_t = key.t - segment.t
-                slope = (key.v - segment.v) / span_t
-                dt = span_t * fraction
-                target_t = key.t + dt
-                target_v = key.v + slope * dt
+            if is_vector2:
+                # Vector2Trackの場合、ハンドルの値は0のまま、時間だけ調整
+                if direction == "in" and segment.t > key.t:
+                    span_t = segment.t - key.t
+                    dt = span_t * fraction
+                    target_t = key.t - dt
+                elif direction == "out" and segment.t < key.t:
+                    span_t = key.t - segment.t
+                    dt = span_t * fraction
+                    target_t = key.t + dt
+                else:
+                    span_t = abs(segment.t - key.t)
+                    dt = span_t * fraction
+                    if direction == "in":
+                        target_t = key.t - dt
+                    else:
+                        target_t = key.t + dt
             else:
-                span_t = abs(segment.t - key.t)
-                slope = (segment.v - key.v) / (segment.t - key.t)
-                dt = span_t * fraction
-                if direction == "in":
+                # ScalarTrackの場合、従来通り
+                if direction == "in" and segment.t > key.t:
+                    span_t = segment.t - key.t
+                    slope = (segment.v - key.v) / span_t
+                    dt = span_t * fraction
                     target_t = key.t - dt
                     target_v = key.v - slope * dt
-                else:
+                elif direction == "out" and segment.t < key.t:
+                    span_t = key.t - segment.t
+                    slope = (key.v - segment.v) / span_t
+                    dt = span_t * fraction
                     target_t = key.t + dt
                     target_v = key.v + slope * dt
+                else:
+                    span_t = abs(segment.t - key.t)
+                    slope = (segment.v - key.v) / (segment.t - key.t)
+                    dt = span_t * fraction
+                    if direction == "in":
+                        target_t = key.t - dt
+                        target_v = key.v - slope * dt
+                    else:
+                        target_t = key.t + dt
+                        target_v = key.v + slope * dt
         else:
             span_t = _fallback_span() * fraction
             if direction == "in":
                 target_t = key.t - span_t
-                target_v = key.v
             else:
                 target_t = key.t + span_t
-                target_v = key.v
+            # Vector2Trackの場合、target_vは0のまま
 
         if direction == "in":
             target_t = max(0.0, target_t)
 
-        if abs(target_t - key.t) < eps and abs(target_v - key.v) < eps:
-            if direction == "in":
-                target_v = key.v - 1e-3
-            else:
-                target_v = key.v + 1e-3
+        if is_vector2:
+            # Vector2Trackの場合、時間だけをチェック
+            if abs(target_t - key.t) < eps:
+                # 時間が同じ場合は少しずらす
+                if direction == "in":
+                    target_t = key.t - 1e-3
+                else:
+                    target_t = key.t + 1e-3
+        else:
+            if abs(target_t - key.t) < eps and abs(target_v - key.v) < eps:
+                if direction == "in":
+                    target_v = key.v - 1e-3
+                else:
+                    target_v = key.v + 1e-3
 
         handle.t = float(target_t)
         handle.v = float(target_v)
@@ -269,6 +306,14 @@ class Track:
     _init_handles: bool = field(default=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # Vector2Trackの場合、キーのvx/vyがNoneの場合は0.0に設定
+        if self.track_type == TrackType.VECTOR2:
+            for key in self.keys:
+                if key.vx is None:
+                    key.vx = 0.0
+                if key.vy is None:
+                    key.vy = 0.0
+        
         if not self._init_handles or self.interp != InterpMode.BEZIER:
             return
 
