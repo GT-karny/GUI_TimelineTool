@@ -67,6 +67,10 @@ class MouseController(QtCore.QObject):
 
         # 状態
         self._left_down = False
+        # 左ボタンドラッグ
+        self._left_press_scene: Optional[QPointF] = None
+        self._left_drag_thresh_px = 5
+        self._left_dragging = False
         # 中ボタンパン
         self._mid_panning = False
         self._mid_last_scene: Optional[QPointF] = None
@@ -152,13 +156,15 @@ class MouseController(QtCore.QObject):
         """Handle left button press by selecting keys or starting marquee."""
 
         self._left_down = True
+        self._left_press_scene = ev.scenePos()
+        self._left_dragging = False
         hit = self.sel.hit_test_nearest(ev.scenePos(), px_thresh=10)
         if hit is not None:
             if self._is_shift(ev):
                 self.sel.add_point(hit)
             else:
                 self.sel.set_single_point(hit)
-            self.key_edit.begin_drag(hit)
+            # begin_dragは移動距離が閾値を超えた場合のみ呼び出す
             self.on_changed()
         else:
             if self.sel.selected:
@@ -175,9 +181,34 @@ class MouseController(QtCore.QObject):
 
         if not self._left_down:
             return False
-        if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+        
+        # ドラッグが既に開始されている場合は更新
+        if self._left_dragging:
+            if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+                self.on_changed()
+                return True
+            self.sel.marquee_update(ev.scenePos())
             self.on_changed()
             return True
+        
+        # ドラッグが開始されていない場合、移動距離をチェック
+        if self._left_press_scene is not None:
+            cur = ev.scenePos()
+            press = self._left_press_scene
+            d = abs(cur.x() - press.x()) + abs(cur.y() - press.y())
+            
+            # 移動距離が閾値を超えた場合、ドラッグを開始
+            if d > self._left_drag_thresh_px:
+                self._left_dragging = True
+                # 押下時にヒットしたキーを取得してドラッグを開始
+                hit = self.sel.hit_test_nearest(self._left_press_scene, px_thresh=10)
+                if hit is not None:
+                    self.key_edit.begin_drag(hit)
+                    if self.key_edit.update_drag(ev.scenePos(), self._scene_to_view):
+                        self.on_changed()
+                        return True
+        
+        # ドラッグが開始されていない場合はマルキーの更新のみ
         self.sel.marquee_update(ev.scenePos())
         self.on_changed()
         return True
@@ -186,8 +217,13 @@ class MouseController(QtCore.QObject):
         """Handle left button release by finalising drags or marquee."""
 
         self._left_down = False
-        self.key_edit.commit_drag()
+        # ドラッグが開始されていた場合のみcommit_dragを呼ぶ
+        if self._left_dragging:
+            self.key_edit.commit_drag()
         self.sel.marquee_commit(additive=self._is_shift(ev))
+        # 状態をリセット
+        self._left_press_scene = None
+        self._left_dragging = False
         self.on_changed()
         return True
 
