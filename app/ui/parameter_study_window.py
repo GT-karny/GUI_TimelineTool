@@ -125,6 +125,18 @@ class FloatTrackSlider(QtWidgets.QWidget):
         self._update_slider_from_value()
         self.value_label.setText(f"{self._value:.6f}")
 
+    def get_range(self) -> tuple[float, float]:
+        """値域を取得。"""
+        return (self._min_value, self._max_value)
+
+    def set_range(self, min_value: float, max_value: float) -> None:
+        """値域を設定。"""
+        self._min_value = float(min_value)
+        self._max_value = float(max_value)
+        self.min_spin.setValue(self._min_value)
+        self.max_spin.setValue(self._max_value)
+        self._update_slider_from_value()
+
 
 class Vector2TrackPlot(QtWidgets.QWidget):
     """Vector2Track用の2Dプロットコントロール。"""
@@ -246,6 +258,17 @@ class Vector2TrackPlot(QtWidgets.QWidget):
             finally:
                 self._updating = False
 
+    def get_range(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """値域を取得。((x_min, x_max), (y_min, y_max))"""
+        x_range = self.plot.plotItem.vb.viewRange()[0]
+        y_range = self.plot.plotItem.vb.viewRange()[1]
+        return ((x_range[0], x_range[1]), (y_range[0], y_range[1]))
+
+    def set_range(self, x_range: tuple[float, float], y_range: tuple[float, float]) -> None:
+        """値域を設定。"""
+        self.plot.setXRange(x_range[0], x_range[1])
+        self.plot.setYRange(y_range[0], y_range[1])
+
 
 class ParameterStudyWindow(QtWidgets.QMainWindow):
     """パラメータスタディモードウィンドウ。"""
@@ -255,10 +278,15 @@ class ParameterStudyWindow(QtWidgets.QMainWindow):
         timeline: Timeline,
         telemetry_bridge: TelemetryBridge,
         parent: Optional[QtWidgets.QWidget] = None,
+        *,
+        playhead_getter: Optional[Callable[[], float]] = None,
+        undo_stack: Optional[QtGui.QUndoStack] = None,
     ) -> None:
         super().__init__(parent)
         self._timeline = timeline
         self._telemetry_bridge = telemetry_bridge
+        self._playhead_getter = playhead_getter
+        self._undo_stack = undo_stack
         self._track_controls: Dict[str, QtWidgets.QWidget] = {}
         self._track_values: Dict[str, tuple[float, ...]] = {}
         self._send_mode: str = "immediate"  # "immediate" or "rate"
@@ -308,6 +336,15 @@ class ParameterStudyWindow(QtWidgets.QMainWindow):
 
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
+
+        # キー追加ボタン
+        if self._playhead_getter is not None and self._undo_stack is not None:
+            button_layout = QtWidgets.QHBoxLayout()
+            self.add_keys_btn = QtWidgets.QPushButton("Add Keys at Playhead")
+            self.add_keys_btn.clicked.connect(self._on_add_keys_at_playhead)
+            button_layout.addWidget(self.add_keys_btn)
+            button_layout.addStretch()
+            layout.addLayout(button_layout)
 
         # スクロール可能なトラックコントロール
         scroll = QtWidgets.QScrollArea()
@@ -411,6 +448,84 @@ class ParameterStudyWindow(QtWidgets.QMainWindow):
             track_snapshots=payload,
             force_send=force_send,
         )
+
+    def get_ranges(self) -> Dict[str, dict]:
+        """全トラックの値域を取得。"""
+        ranges = {}
+        for track_id, control in self._track_controls.items():
+            if isinstance(control, FloatTrackSlider):
+                min_val, max_val = control.get_range()
+                ranges[track_id] = {"min": min_val, "max": max_val}
+            elif isinstance(control, Vector2TrackPlot):
+                x_range, y_range = control.get_range()
+                ranges[track_id] = {
+                    "x_range": [x_range[0], x_range[1]],
+                    "y_range": [y_range[0], y_range[1]],
+                }
+        return ranges
+
+    def set_ranges(self, ranges: Dict[str, dict]) -> None:
+        """全トラックの値域を設定。"""
+        for track_id, range_data in ranges.items():
+            control = self._track_controls.get(track_id)
+            if control is None:
+                continue
+            if isinstance(control, FloatTrackSlider):
+                if "min" in range_data and "max" in range_data:
+                    control.set_range(range_data["min"], range_data["max"])
+            elif isinstance(control, Vector2TrackPlot):
+                if "x_range" in range_data and "y_range" in range_data:
+                    x_range = tuple(range_data["x_range"])
+                    y_range = tuple(range_data["y_range"])
+                    control.set_range(x_range, y_range)
+
+    def get_current_values(self) -> Dict[str, tuple[float, ...]]:
+        """全トラックの現在値を取得。"""
+        return dict(self._track_values)
+
+    def _on_add_keys_at_playhead(self) -> None:
+        """再生カーソル位置に現在のパラメータスタディ値をキーとして追加。"""
+        if self._playhead_getter is None or self._undo_stack is None:
+            return
+
+        t = self._playhead_getter()
+        if t < 0.0:
+            t = 0.0
+
+        from PySide6.QtGui import QUndoCommand
+        from ..actions.undo_commands import AddKeyCommand
+
+        # 複数のキーを一度に追加するための親コマンド
+        root_cmd = QUndoCommand("Add Keys from Parameter Study")
+        
+        for track in self._timeline.iter_tracks():
+            values = self._track_values.get(track.track_id, (0.0,))
+            if track.track_type == TrackType.SCALAR:
+                v = values[0] if len(values) > 0 else 0.0
+                cmd = AddKeyCommand(
+                    self._timeline,
+                    track.track_id,
+                    t,
+                    v,
+                    label=f"Add Key: {track.name}",
+                    parent=root_cmd,
+                )
+            elif track.track_type == TrackType.VECTOR2:
+                vx = values[0] if len(values) > 0 else 0.0
+                vy = values[1] if len(values) > 1 else 0.0
+                cmd = AddKeyCommand(
+                    self._timeline,
+                    track.track_id,
+                    t,
+                    0.0,  # vは0.0（Vector2Trackでは使用しない）
+                    vx=vx,
+                    vy=vy,
+                    label=f"Add Key: {track.name}",
+                    parent=root_cmd,
+                )
+
+        if root_cmd.childCount() > 0:
+            self._undo_stack.push(root_cmd)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """ウィンドウが閉じられるときの処理。"""

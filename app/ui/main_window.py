@@ -840,6 +840,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 timeline=self.timeline,
                 telemetry_bridge=self.telemetry_bridge,
                 parent=self,
+                playhead_getter=lambda: self.playback.playhead,
+                undo_stack=self.undo,
             )
             self._parameter_study_window.destroyed.connect(
                 lambda: setattr(self, "_parameter_study_window", None)
