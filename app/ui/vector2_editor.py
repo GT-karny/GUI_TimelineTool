@@ -33,8 +33,11 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         # プロット
         self.plot = pg.PlotWidget(background="#2b2b2b")
         self.plot.showGrid(x=True, y=True, alpha=0.3)
-        self.plot.setLabel("bottom", "X")
-        self.plot.setLabel("left", "Y")
+        # Trackのlabel_x/label_yを使用（なければ"X"/"Y"）
+        label_x = track.label_x if track.label_x is not None else "X"
+        label_y = track.label_y if track.label_y is not None else "Y"
+        self.plot.setLabel("bottom", label_x)
+        self.plot.setLabel("left", label_y)
         self.plot.setAspectLocked(False)
 
         # 現在のキー位置
@@ -86,9 +89,12 @@ class Vector2EditorWindow(QtWidgets.QDialog):
         self.y_spin.setValue(vy)
         self.y_spin.valueChanged.connect(self._on_y_changed)
 
-        controls_layout.addWidget(QtWidgets.QLabel("X:"))
+        # Trackのlabel_x/label_yを使用（なければ"X"/"Y"）
+        label_x = track.label_x if track.label_x is not None else "X"
+        label_y = track.label_y if track.label_y is not None else "Y"
+        controls_layout.addWidget(QtWidgets.QLabel(f"{label_x}:"))
         controls_layout.addWidget(self.x_spin)
-        controls_layout.addWidget(QtWidgets.QLabel("Y:"))
+        controls_layout.addWidget(QtWidgets.QLabel(f"{label_y}:"))
         controls_layout.addWidget(self.y_spin)
         controls_layout.addStretch()
 
