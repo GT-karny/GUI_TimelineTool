@@ -237,6 +237,13 @@ class MouseController(QtCore.QObject):
         self.on_changed()
         return True
 
+    def reset_drag_state(self) -> None:
+        """ドラッグ状態をリセット（2D編集ウィンドウを開く際などに使用）。"""
+        self._left_down = False
+        self._left_press_scene = None
+        self._left_dragging = False
+        self.key_edit.commit_drag()
+
     def _handle_left_button_double_click(self, ev: QtWidgets.QGraphicsSceneMouseEvent) -> bool:
         """Handle double click by adding a key at the cursor position."""
 

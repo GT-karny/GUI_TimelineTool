@@ -542,6 +542,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if track.track_type != TrackType.VECTOR2:
             return
         
+        # 2D編集ウィンドウを開く前にマウスのクリック状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        
         vx = key.vx if key.vx is not None else 0.0
         vy = key.vy if key.vy is not None else 0.0
         
@@ -552,6 +556,11 @@ class MainWindow(QtWidgets.QMainWindow):
         
         editor = Vector2EditorWindow(track, key, on_update, parent=self)
         editor.exec()
+        
+        # 2D編集ウィンドウを閉じた後も状態をリセット
+        if self.mouse is not None:
+            self.mouse.reset_drag_state()
+        self._refresh_view()
 
     # -------------------- Playback callbacks --------------------
     def _on_playback_playhead_changed(self, playhead_s: float, playing: bool) -> None:
